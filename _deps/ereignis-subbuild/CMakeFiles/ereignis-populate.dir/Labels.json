@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/CMakeFiles/ereignis-populate"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/CMakeFiles/ereignis-populate.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/CMakeFiles/ereignis-populate-complete.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-build.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-configure.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-download.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-install.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-patch.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-test.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/ereignis-subbuild/ereignis-populate-prefix/src/ereignis-populate-stamp/ereignis-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"ereignis-populate"
+		],
+		"name" : "ereignis-populate"
+	}
+}

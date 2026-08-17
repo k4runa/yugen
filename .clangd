@@ -1,0 +1,24 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    - -std=c++23
+    - -I/home/g4lice/Custom/Projects/yugen/include
+    - -Wno-unknown-warning-option
+  Remove:
+    - -Wno-attributes=*
+
+Diagnostics:
+  UnusedIncludes: Strict
+  Suppress:
+    - unused-includes
+  ClangTidy:
+    Add: [performance-*, bugprone-*, modernize-*]
+    Remove: [modernize-use-trailing-return-type]
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+
+Index:
+  StandardLibrary: Yes

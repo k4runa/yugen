@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/CMakeFiles/saucer-fill-populate"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/CMakeFiles/saucer-fill-populate.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/CMakeFiles/saucer-fill-populate-complete.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-build.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-configure.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-download.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-install.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-patch.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-test.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/saucer-fill-subbuild/saucer-fill-populate-prefix/src/saucer-fill-populate-stamp/saucer-fill-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"saucer-fill-populate"
+		],
+		"name" : "saucer-fill-populate"
+	}
+}

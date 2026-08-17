@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/CMakeFiles/lockpp-populate"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/CMakeFiles/lockpp-populate.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/CMakeFiles/lockpp-populate-complete.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-build.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-configure.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-download.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-install.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-patch.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-test.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/lockpp-subbuild/lockpp-populate-prefix/src/lockpp-populate-stamp/lockpp-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"lockpp-populate"
+		],
+		"name" : "lockpp-populate"
+	}
+}

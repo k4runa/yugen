@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/g4lice/Custom/Projects/yugen/_deps/saucer-embed-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

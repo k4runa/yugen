@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/CMakeFiles/polo-populate"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/CMakeFiles/polo-populate.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/CMakeFiles/polo-populate-complete.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-build.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-configure.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-download.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-install.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-patch.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-test.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/polo-subbuild/polo-populate-prefix/src/polo-populate-stamp/polo-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"polo-populate"
+		],
+		"name" : "polo-populate"
+	}
+}

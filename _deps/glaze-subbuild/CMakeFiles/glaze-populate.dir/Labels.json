@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/CMakeFiles/glaze-populate"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/CMakeFiles/glaze-populate.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/CMakeFiles/glaze-populate-complete.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-build.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-configure.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-download.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-install.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-patch.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-test.rule"
+		},
+		{
+			"file" : "/home/g4lice/Custom/Projects/yugen/_deps/glaze-subbuild/glaze-populate-prefix/src/glaze-populate-stamp/glaze-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"glaze-populate"
+		],
+		"name" : "glaze-populate"
+	}
+}
