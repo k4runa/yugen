@@ -10,9 +10,19 @@ body,
   height: 100%;
 }
 
+/* every measurement in the app is in rem, so this scales the whole ui with the window */
+html {
+  font-size: clamp(15px, 0.48vw + 10.8px, 22px);
+}
+
 body {
   margin: 0;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* real SF when this ever runs on a mac, Inter as the stand-in everywhere else */
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Inter', 'Inter Variable', system-ui,
+    'Segoe UI', Roboto, sans-serif;
+  font-size: 0.875rem;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
