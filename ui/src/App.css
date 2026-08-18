@@ -2,7 +2,6 @@
     --bg: #ececec;
     --card: #f4f4f4;
     --card-strong: #ffffff;
-    --panel: #fafafa;
     --hover: #e6e6e6;
 
     --text: #131313;
@@ -15,7 +14,10 @@
     --danger: #c62828;
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     --skeleton: #e0e0e0;
+    --pin: #2f8f57;
     --scroll: rgba(0, 0, 0, 0.24);
+
+    --gutter: 0.5rem;
 }
 
 /* no explicit choice: follow the system */
@@ -24,7 +26,6 @@
         --bg: #131313;
         --card: #1a1a1a;
         --card-strong: #2a2a2a;
-        --panel: #1f1f1f;
         --hover: #262626;
 
         --text: #ededed;
@@ -37,6 +38,7 @@
         --danger: #ef5350;
         --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
         --skeleton: #242424;
+        --pin: #7bd88f;
         --scroll: rgba(255, 255, 255, 0.22);
     }
 }
@@ -45,7 +47,6 @@
     --bg: #131313;
     --card: #1a1a1a;
     --card-strong: #2a2a2a;
-    --panel: #1f1f1f;
     --hover: #262626;
 
     --text: #ededed;
@@ -58,6 +59,7 @@
     --danger: #ef5350;
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     --skeleton: #242424;
+    --pin: #7bd88f;
     --scroll: rgba(255, 255, 255, 0.22);
 }
 
@@ -73,7 +75,7 @@ button:focus-visible {
 
 .shell {
     height: 100vh;
-    padding: 1.375rem;
+    padding: 0.75rem;
     display: flex;
     flex-direction: column;
     gap: 0.875rem;
@@ -84,7 +86,6 @@ button:focus-visible {
 
 /* ---------- surfaces ---------- */
 
-.frame,
 .player,
 .context-menu {
     border: 1px solid var(--border);
@@ -117,8 +118,18 @@ button:focus-visible {
     min-height: 0;
     position: relative;
     display: grid;
-    border-radius: 1.375rem;
-    overflow: hidden;
+    /* the panels float on the app background instead of sharing one card */
+    gap: var(--gutter);
+}
+
+.sidebar,
+.main,
+.rightbar {
+    min-height: 0;
+    border: 1px solid var(--border);
+    border-radius: 0.875rem;
+    background: var(--card);
+    box-shadow: var(--shadow);
 }
 
 /* drag handles sitting on the column edges */
@@ -126,8 +137,8 @@ button:focus-visible {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 0.5rem;
-    margin-left: -0.25rem;
+    width: var(--gutter);
+    margin-left: calc(var(--gutter) / -2);
     z-index: 10;
     cursor: col-resize;
 }
@@ -135,8 +146,8 @@ button:focus-visible {
 .resizer::after {
     content: '';
     position: absolute;
-    top: 0;
-    bottom: 0;
+    top: 1rem;
+    bottom: 1rem;
     left: 50%;
     width: 1px;
     transform: translateX(-50%);
@@ -203,7 +214,7 @@ button:focus-visible {
     width: 100%;
     padding: 0.5625rem 0.625rem;
     border: 1px solid transparent;
-    border-radius: 0.75rem;
+    border-radius: 0.5625rem;
     background: none;
     color: var(--text);
     font: inherit;
@@ -228,6 +239,13 @@ button:focus-visible {
     opacity: 0.75;
 }
 
+.pinned {
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--pin);
+}
+
 .nav-count {
     margin-left: auto;
     color: var(--text-dim);
@@ -248,7 +266,7 @@ button:focus-visible {
     width: 100%;
     padding: 0.6875rem;
     border: none;
-    border-radius: 0.75rem;
+    border-radius: 0.5625rem;
     background: var(--accent-soft);
     color: var(--accent);
     font: inherit;
@@ -273,10 +291,7 @@ button:focus-visible {
     display: flex;
     flex-direction: column;
     min-width: 0;
-    margin: 0.75rem 0 0.75rem 0.375rem;
     padding: 1.25rem 1.5rem;
-    border-radius: 1.25rem;
-    background: var(--panel);
     overflow-y: auto;
 }
 
@@ -351,7 +366,7 @@ button:focus-visible {
 .hero-cover {
     width: 12.5rem;
     height: 12.5rem;
-    border-radius: 0.875rem;
+    border-radius: 0.625rem;
     object-fit: cover;
     box-shadow: var(--shadow);
 }
@@ -416,7 +431,7 @@ button:focus-visible {
     align-items: center;
     gap: 0.75rem;
     padding: 0.4375rem 0.625rem;
-    border-radius: 0.625rem;
+    border-radius: 0.5rem;
     cursor: pointer;
     transition: background 0.18s ease;
 }
@@ -569,7 +584,7 @@ button:focus-visible {
     width: 100%;
     aspect-ratio: 1;
     margin-bottom: 0.5625rem;
-    border-radius: 0.75rem;
+    border-radius: 0.5625rem;
     object-fit: cover;
     transition: transform 0.2s ease;
 }
@@ -636,7 +651,7 @@ button:focus-visible {
     padding: 0.5rem;
     margin-bottom: 0.25rem;
     border: 1px solid transparent;
-    border-radius: 0.875rem;
+    border-radius: 0.625rem;
     background: none;
     color: inherit;
     font: inherit;
@@ -659,7 +674,7 @@ button:focus-visible {
     width: 2.625rem;
     height: 2.625rem;
     flex: none;
-    border-radius: 0.625rem;
+    border-radius: 0.5rem;
     object-fit: cover;
     /* keeps the box intact while a youtube thumbnail loads or fails */
     background: var(--skeleton);
@@ -701,6 +716,43 @@ button:focus-visible {
     to { transform: rotate(360deg); }
 }
 
+/* stand-in rows while yt-dlp is still answering */
+.skeleton {
+    cursor: default;
+    pointer-events: none;
+}
+
+.skeleton .placeholder,
+.skeleton .bar {
+    background: var(--skeleton);
+    animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton .bar {
+    height: 0.5rem;
+    border-radius: 0.25rem;
+}
+
+.skeleton .bar:first-child {
+    width: 80%;
+    margin-bottom: 0.375rem;
+}
+
+.skeleton .bar.short {
+    width: 45%;
+}
+
+@keyframes shimmer {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
+
+/* the section title is the first child, so the rows start at nth-child(2) */
+.skeleton:nth-child(3) .placeholder, .skeleton:nth-child(3) .bar { animation-delay: 0.1s; }
+.skeleton:nth-child(4) .placeholder, .skeleton:nth-child(4) .bar { animation-delay: 0.2s; }
+.skeleton:nth-child(5) .placeholder, .skeleton:nth-child(5) .bar { animation-delay: 0.3s; }
+.skeleton:nth-child(6) .placeholder, .skeleton:nth-child(6) .bar { animation-delay: 0.4s; }
+
 /* ---------- context menu ---------- */
 
 .context-menu {
@@ -709,9 +761,9 @@ button:focus-visible {
     display: flex;
     flex-direction: column;
     gap: 0.125rem;
-    width: 11.875rem;
+    width: 13rem;
     padding: 0.375rem;
-    border-radius: 0.875rem;
+    border-radius: 0.625rem;
 }
 
 .context-head {
@@ -728,7 +780,7 @@ button:focus-visible {
     gap: 0.625rem;
     padding: 0.5rem 0.625rem;
     border: none;
-    border-radius: 0.5625rem;
+    border-radius: 0.4375rem;
     background: none;
     color: var(--text);
     font: inherit;
@@ -764,7 +816,7 @@ button:focus-visible {
     gap: 1.25rem;
     flex: none;
     padding: 0.875rem 1.375rem;
-    border-radius: 1.375rem;
+    border-radius: 1rem;
     overflow: hidden;
 }
 
@@ -813,7 +865,7 @@ button:focus-visible {
     width: 2.625rem;
     height: 2.625rem;
     flex: none;
-    border-radius: 0.5625rem;
+    border-radius: 0.4375rem;
     object-fit: cover;
     background: var(--skeleton);
 }
@@ -911,4 +963,263 @@ button:focus-visible {
 .main:hover::-webkit-scrollbar-thumb,
 .rightbar:hover::-webkit-scrollbar-thumb {
     background-color: var(--scroll);
+}
+
+/* ---------- playlists ---------- */
+
+.playlists-label {
+    display: flex;
+    align-items: center;
+    margin-top: 1.125rem;
+}
+
+.icon-btn.tiny {
+    width: 1.375rem;
+    height: 1.375rem;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+}
+
+.icon-btn.tiny:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+.nav-hint {
+    margin: 0.125rem 0.625rem;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
+
+.nav-item .ellipsis {
+    min-width: 0;
+}
+
+.context-sep {
+    height: 1px;
+    margin: 0.25rem 0.375rem;
+    background: var(--border);
+}
+
+/* ---------- dialog ---------- */
+
+.overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: grid;
+    place-items: center;
+    background: rgb(0 0 0 / 0.42);
+}
+
+.dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    width: min(22rem, 80vw);
+    padding: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    background: var(--card);
+    box-shadow: var(--shadow);
+}
+
+.dialog h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+}
+
+.dialog input {
+    padding: 0.625rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--card-strong);
+    color: var(--text);
+    font: inherit;
+    outline: none;
+}
+
+.dialog input:focus {
+    border-color: var(--text-dim);
+}
+
+.dialog-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.pill-btn.primary {
+    background: var(--text);
+    color: var(--bg);
+}
+
+/* ---------- add-to submenu ---------- */
+
+.context-menu .submenu-item .ico:last-child {
+    margin-left: auto;
+    transition: transform 0.15s ease;
+}
+
+.context-menu .submenu-item.open .ico:last-child {
+    transform: rotate(90deg);
+}
+
+.context-menu .submenu-item.open,
+.context-menu .submenu-item:hover {
+    background: var(--hover);
+}
+
+.submenu-wrap {
+    position: relative;
+}
+
+.context-menu.submenu {
+    position: absolute;
+    /* no gap: a dead strip between the two would drop the hover */
+    left: 100%;
+    top: -0.375rem;
+    max-height: 17rem;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    background: var(--card);
+    box-shadow: var(--shadow);
+}
+
+.context-menu.submenu.flip {
+    left: auto;
+    right: 100%;
+}
+
+.context-menu.submenu button .ico:last-child {
+    margin-left: auto;
+    opacity: 1;
+    color: var(--accent);
+}
+
+/* ---------- sort / view menu ---------- */
+
+.filter-wrap {
+    position: relative;
+    margin-left: auto;
+    flex: none;
+}
+
+.icon-btn.filter {
+    width: 2rem;
+    height: 2rem;
+    margin-left: 0;
+    color: var(--text-dim);
+}
+
+.icon-btn.filter.on,
+.icon-btn.filter:hover {
+    color: var(--text);
+}
+
+.filter-menu {
+    position: absolute;
+    top: calc(100% + 0.375rem);
+    right: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    width: 12rem;
+    padding: 0.375rem;
+    border: 1px solid var(--border);
+    border-radius: 0.625rem;
+    background: var(--card);
+    box-shadow: var(--shadow);
+}
+
+.filter-label {
+    padding: 0.375rem 0.625rem 0.25rem;
+    color: var(--text-dim);
+    font-size: 0.6875rem;
+    font-weight: 500;
+}
+
+.filter-menu button {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.4375rem 0.625rem;
+    border: none;
+    border-radius: 0.4375rem;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.8125rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.filter-menu button:hover {
+    background: var(--hover);
+}
+
+.filter-menu button .ico {
+    flex: none;
+    margin-left: auto;
+    color: var(--accent);
+}
+
+/* ---------- list layout ---------- */
+
+.track-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.track-list .row {
+    display: grid;
+    grid-template-columns: 2.75rem minmax(0, 1.4fr) minmax(0, 1fr) 7rem auto 3rem;
+    align-items: center;
+    gap: 0.875rem;
+    padding: 0.4375rem 0.625rem;
+    border-radius: 0.5625rem;
+    cursor: pointer;
+}
+
+.track-list .row:hover {
+    background: var(--hover);
+}
+
+.track-list .row.playing .name {
+    color: var(--accent);
+}
+
+.row-cover {
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 0.5rem;
+    object-fit: cover;
+}
+
+.track-list .row-added,
+.track-list .row-length {
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.track-list .row-length {
+    text-align: right;
+}
+
+/* the middle columns are the first thing to go when the window gets tight */
+@media (max-width: 60rem) {
+    .track-list .row {
+        grid-template-columns: 2.75rem minmax(0, 1fr) auto 3rem;
+    }
+
+    .track-list .row-album,
+    .track-list .row-added {
+        display: none;
+    }
 }

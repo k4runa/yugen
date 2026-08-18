@@ -2,9 +2,84 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const FILE_PATH = '/home/g4lice/Musics/'
+const LAYOUT_KEY = 'yugen.layout'
+
+// widths are shares of the window, so the columns keep following it after a manual resize.
+// the rem pair is the floor/ceiling css clamps them to at extreme window sizes.
+const SIDEBAR_RANGE = [8, 26] as const
+const RAIL_RANGE = [10, 30] as const
+const SIDEBAR_BOUNDS = ['9rem', '22rem'] as const
+const RAIL_BOUNDS = ['10rem', '26rem'] as const
+
+const column = ([min, max]: readonly [string, string], percent: number) =>
+    `clamp(${min}, ${percent}%, ${max})`
+
+const clamp = (value: number, [min, max]: readonly [number, number]) =>
+    Math.min(Math.max(value, min), max)
+
+// webkit keeps localStorage under ~/.local/share/yugen, so this survives a restart
+function stored_width(key: 'sidebar' | 'rail', fallback: number, range: readonly [number, number]) {
+    try {
+        const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')[key]
+        return typeof value === 'number' && Number.isFinite(value) ? clamp(value, range) : fallback
+    } catch {
+        return fallback
+    }
+}
+
+function stored_pref<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+    try {
+        const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')[key]
+        return allowed.includes(value) ? value : fallback
+    } catch {
+        return fallback
+    }
+}
+
+// pinned playlists live here rather than in playlists.json, which has no field for them
+function stored_pins(): string[] {
+    try {
+        const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}').pins
+        return Array.isArray(value) ? value.filter((name) => typeof name === 'string') : []
+    } catch {
+        return []
+    }
+}
+
+function save_pref(key: string, value: string | string[]) {
+    try {
+        const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...saved, [key]: value }))
+    } catch {
+        // storage unavailable, the choice just will not stick
+    }
+}
 
 type Theme = 'system' | 'light' | 'dark'
-type View = 'library' | 'liked' | 'albums' | 'artists'
+type View = 'library' | 'liked' | 'albums' | 'artists' | 'playlist'
+
+// right-click targets: a track, a playlist in the sidebar, or the sidebar itself
+type MenuTarget =
+    { kind: 'song'; song: string } | { kind: 'playlist'; playlist: string } | { kind: 'sidebar' }
+
+type Menu = MenuTarget & { x: number; y: number }
+
+type Dialog = { mode: 'create'; song?: string } | { mode: 'rename'; playlist: string }
+
+type Sort = 'title' | 'added' | 'artist' | 'album'
+type Layout = 'list' | 'compact'
+
+const SORTS: { id: Sort; label: string }[] = [
+    { id: 'title', label: 'Title' },
+    { id: 'added', label: 'Recently added' },
+    { id: 'artist', label: 'Artist' },
+    { id: 'album', label: 'Album' },
+]
+
+const LAYOUTS: { id: Layout; label: string }[] = [
+    { id: 'list', label: 'List' },
+    { id: 'compact', label: 'Compact' },
+]
 
 type SearchResult = {
     title: string
@@ -37,6 +112,13 @@ type Bridge = {
     get_liked_songs(): Promise<string[]>
     like_song(name: string): Promise<void>
     unlike_song(name: string): Promise<void>
+    get_playlists(): Promise<string[]>
+    get_playlist(playlist: string): Promise<string[]>
+    create_playlist(playlist: string): Promise<boolean>
+    delete_playlist(playlist: string): Promise<boolean>
+    rename_playlist(playlist: string, renamed: string): Promise<boolean>
+    add_to_playlist(playlist: string, name: string): Promise<boolean>
+    remove_from_playlist(playlist: string, name: string): Promise<boolean>
 }
 
 declare global {
@@ -53,6 +135,22 @@ function format_time(seconds: number) {
     const m = Math.floor(seconds / 60)
     const s = Math.floor(seconds % 60)
     return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function format_date(seconds: number) {
+    if (!seconds) return '--'
+
+    const days = Math.floor((Date.now() / 1000 - seconds) / 86400)
+
+    if (days <= 0) return 'Today'
+    if (days === 1) return 'Yesterday'
+    if (days < 30) return `${days} days ago`
+
+    return new Date(seconds * 1000).toLocaleDateString(undefined, {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+    })
 }
 
 /* ---------- icons ---------- */
@@ -126,6 +224,15 @@ const ICONS = {
     download: 'M12 4v11m-4-4 4 4 4-4M5 19h14',
     refresh: 'M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4',
     trash: 'M5 7h14M10 7V5h4v2M6 7l1 13h10l1-13M10 11v5m4-5v5',
+    playlist: 'M4 6h11M4 11h11M4 16h6M18 16V7l3 1M18 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4',
+    plus: 'M12 5v14M5 12h14',
+    minus: 'M5 12h14',
+    rename: 'M4 20h16M5 15.5 15.5 5a2.1 2.1 0 0 1 3 3L8 18.5l-4 1z',
+    chevron: 'M9 5l7 7-7 7',
+    check: 'M4.5 12.5 9 17l10.5-10.5',
+    filter: 'M4 6h16M7 12h10M10 18h4',
+    pin: 'M8 3h8v2h-1l1 6h1v2h-4v6h-2v-6H7v-2h1l1-6H8z',
+    clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 7v5l3.5 2',
 }
 
 export default function App() {
@@ -146,14 +253,38 @@ export default function App() {
     const [position, set_position] = useState(0)
     const [seeking, set_seeking] = useState<number | null>(null)
     const [shuffle_on, set_shuffle_on] = useState(false)
-    const [shuffled, set_shuffled] = useState<{ key: string; order: string[] } | null>(null)
+    const [shuffled, set_shuffled] = useState<{
+        key: string
+        order: string[]
+    } | null>(null)
 
-    const [menu, set_menu] = useState<{ x: number; y: number; song: string } | null>(null)
+    const [menu, set_menu] = useState<Menu | null>(null)
+    const [submenu, set_submenu] = useState(false)
+    const [filters, set_filters] = useState(false)
 
-    // column widths are kept in rem so they grow with the root font size
-    const [sidebar_w, set_sidebar_w] = useState(13)
-    const [rail_w, set_rail_w] = useState(16.75)
-    const resizing = useRef<{ edge: 'sidebar' | 'rail'; from: number; width: number } | null>(null)
+    const [sort, set_sort] = useState<Sort>(() =>
+        stored_pref('sort', SORTS.map((s) => s.id), 'title'),
+    )
+    const [track_layout, set_track_layout] = useState<Layout>(() =>
+        stored_pref('track_layout', LAYOUTS.map((l) => l.id), 'list'),
+    )
+    const [dialog, set_dialog] = useState<Dialog | null>(null)
+    const [draft, set_draft] = useState('')
+
+    // name -> its tracks, kept in sync with playlists.json
+    const [playlists, set_playlists] = useState<Record<string, string[]>>({})
+    const [pins, set_pins] = useState<string[]>(stored_pins)
+
+    // column widths are percentages of the frame, so they follow every window resize
+    const [sidebar_w, set_sidebar_w] = useState(() => stored_width('sidebar', 13, SIDEBAR_RANGE))
+    const [rail_w, set_rail_w] = useState(() => stored_width('rail', 17, RAIL_RANGE))
+    const frame = useRef<HTMLDivElement>(null)
+    const resizing = useRef<{
+        edge: 'sidebar' | 'rail'
+        from: number
+        width: number
+        latest: number
+    } | null>(null)
 
     const [query, set_query] = useState('')
     const [searching, set_searching] = useState(false)
@@ -165,6 +296,20 @@ export default function App() {
         if (theme === 'system') delete document.documentElement.dataset.theme
         else document.documentElement.dataset.theme = theme
     }, [theme])
+
+    useEffect(() => {
+        if (!filters) return
+
+        const close = () => set_filters(false)
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+        }
+    }, [filters])
 
     useEffect(() => {
         if (!menu) return
@@ -188,6 +333,7 @@ export default function App() {
     useEffect(() => {
         fetch_songs()
         sync_liked()
+        sync_playlists()
     }, [])
 
     // kept in a ref so the poller below never has to be torn down and rebuilt
@@ -252,13 +398,90 @@ export default function App() {
         }
     }
 
+    // playlists.json is small, so the whole thing is pulled in one go
+    async function sync_playlists() {
+        try {
+            const names = await bridge().get_playlists()
+            const tracks = await Promise.all(names.map((name) => bridge().get_playlist(name)))
+
+            set_playlists(Object.fromEntries(names.map((name, i) => [name, tracks[i]])))
+        } catch {
+            // keep the last known list rather than blanking the sidebar
+        }
+    }
+
+    async function create_playlist(name: string) {
+        const trimmed = name.trim()
+        if (!trimmed) return
+
+        await bridge().create_playlist(trimmed)
+        await sync_playlists()
+    }
+
+    function toggle_pin(name: string) {
+        const next = pins.includes(name) ? pins.filter((pin) => pin !== name) : [...pins, name]
+
+        set_pins(next)
+        save_pref('pins', next)
+    }
+
+    // a pin points at a name, so it has to follow renames and disappear with deletes
+    function move_pin(name: string, renamed: string | null) {
+        if (!pins.includes(name)) return
+
+        const next = renamed
+            ? pins.map((pin) => (pin === name ? renamed : pin))
+            : pins.filter((pin) => pin !== name)
+
+        set_pins(next)
+        save_pref('pins', next)
+    }
+
+    async function rename_playlist(name: string, renamed: string) {
+        const trimmed = renamed.trim()
+        if (!trimmed || trimmed === name) return
+
+        await bridge().rename_playlist(name, trimmed)
+        await sync_playlists()
+
+        move_pin(name, trimmed)
+
+        // the open view is keyed by name, so follow the rename
+        if (view === 'playlist' && selection === name) set_selection(trimmed)
+    }
+
+    async function delete_playlist(name: string) {
+        await bridge().delete_playlist(name)
+        await sync_playlists()
+
+        move_pin(name, null)
+
+        if (view === 'playlist' && selection === name) open_view('library')
+    }
+
+    async function add_to_playlist(playlist: string, name: string) {
+        await bridge().add_to_playlist(playlist, name)
+        await sync_playlists()
+    }
+
+    async function remove_from_playlist(playlist: string, name: string) {
+        await bridge().remove_from_playlist(playlist, name)
+        await sync_playlists()
+    }
+
     async function remove_song(name: string) {
         await bridge().delete_song(FILE_PATH + name)
 
         if (current === name) set_current(null)
 
+        // nothing cascades on the disk side, so drop the dangling entries here
+        for (const [playlist, tracks] of Object.entries(playlists)) {
+            if (tracks.includes(name)) await bridge().remove_from_playlist(playlist, name)
+        }
+
         await fetch_songs()
         await sync_liked()
+        await sync_playlists()
     }
 
     async function play_music(name: string) {
@@ -363,6 +586,8 @@ export default function App() {
     const artist_of = (name: string) => metadata_map[name]?.[1] || 'Unknown artist'
     const album_of = (name: string) => metadata_map[name]?.[2] || 'Unknown album'
     const cover_of = (name: string) => covers_map[name]
+    const length_of = (name: string) => Number(metadata_map[name]?.[3]) || 0
+    const added_of = (name: string) => Number(metadata_map[name]?.[4]) || 0
 
     // group the library by an id3 field, keeping the scan order
     function group_by(key: (name: string) => string) {
@@ -387,12 +612,32 @@ export default function App() {
     const liked_songs = songs.filter((name) => liked.has(name))
     const groups = view === 'albums' ? albums : view === 'artists' ? artists : null
 
+    // a playlist only lists what is still on disk
+    const playlist_songs =
+        view === 'playlist' && selection
+            ? (playlists[selection] ?? [])
+                  .filter((name) => songs.includes(name))
+                  .sort((a, b) =>
+                      // newest first for dates, alphabetical for the rest
+                      sort === 'added'
+                          ? added_of(b) - added_of(a)
+                          : sort === 'artist'
+                            ? artist_of(a).localeCompare(artist_of(b))
+                            : sort === 'album'
+                              ? album_of(a).localeCompare(album_of(b))
+                              : title_of(a).localeCompare(title_of(b)),
+                  )
+            : []
+
     // the current queue: what prev/next walks through
-    const listed = selection
-        ? (groups?.get(selection) ?? [])
-        : view === 'liked'
-          ? liked_songs
-          : songs
+    const listed =
+        view === 'playlist'
+            ? playlist_songs
+            : selection
+              ? (groups?.get(selection) ?? [])
+              : view === 'liked'
+                ? liked_songs
+                : songs
 
     // prev/next walk the shuffled order when shuffle is on, otherwise the view order
     const listed_key = listed.join('\u0000')
@@ -451,20 +696,48 @@ export default function App() {
     const up_next = current ? queue.slice(queue.indexOf(current) + 1).slice(0, 4) : []
 
     const NAV: { id: View; label: string; icon: string; count: number }[] = [
-        { id: 'library', label: 'Library', icon: ICONS.library, count: songs.length },
-        { id: 'liked', label: 'Liked Songs', icon: ICONS.heart, count: liked_songs.length },
+        {
+            id: 'library',
+            label: 'Library',
+            icon: ICONS.library,
+            count: songs.length,
+        },
+        {
+            id: 'liked',
+            label: 'Liked Songs',
+            icon: ICONS.heart,
+            count: liked_songs.length,
+        },
         { id: 'albums', label: 'Albums', icon: ICONS.album, count: albums.size },
-        { id: 'artists', label: 'Artists', icon: ICONS.artist, count: artists.size },
+        {
+            id: 'artists',
+            label: 'Artists',
+            icon: ICONS.artist,
+            count: artists.size,
+        },
     ]
 
-    const root_rem = () => parseFloat(getComputedStyle(document.documentElement).fontSize)
+    const frame_width = () => frame.current?.getBoundingClientRect().width || window.innerWidth
 
     const start_resize = (edge: 'sidebar' | 'rail') => (e: React.PointerEvent<HTMLDivElement>) => {
         e.preventDefault()
         e.currentTarget.setPointerCapture(e.pointerId)
         e.currentTarget.classList.add('active')
 
-        resizing.current = { edge, from: e.clientX, width: edge === 'sidebar' ? sidebar_w : rail_w }
+        // the css clamp can be holding the column off its stored share, so start from
+        // where the handle actually sits rather than from the stored number
+        const bounds = frame.current!.getBoundingClientRect()
+        const handle = e.currentTarget.getBoundingClientRect()
+        const center = handle.left + handle.width / 2
+
+        // the handle rides the middle of the gutter, the column edge is half a gutter back
+        const gutter = parseFloat(getComputedStyle(frame.current!).columnGap) || 0
+        const shown =
+            (edge === 'sidebar' ? center - bounds.left : bounds.right - center) - gutter / 2
+
+        const width = (shown / bounds.width) * 100
+
+        resizing.current = { edge, from: e.clientX, width, latest: width }
     }
 
     function move_resize(e: React.PointerEvent<HTMLDivElement>) {
@@ -472,28 +745,68 @@ export default function App() {
         if (!drag) return
 
         // the rail grows leftwards, so its delta is inverted
-        const delta = (e.clientX - drag.from) / root_rem()
-        const next = drag.width + (drag.edge === 'sidebar' ? delta : -delta)
+        const delta = ((e.clientX - drag.from) / frame_width()) * 100
+        const raw = drag.width + (drag.edge === 'sidebar' ? delta : -delta)
 
-        if (drag.edge === 'sidebar') set_sidebar_w(Math.min(Math.max(next, 9), 22))
-        else set_rail_w(Math.min(Math.max(next, 10), 26))
+        if (drag.edge === 'sidebar') {
+            drag.latest = clamp(raw, SIDEBAR_RANGE)
+            set_sidebar_w(drag.latest)
+        } else {
+            drag.latest = clamp(raw, RAIL_RANGE)
+            set_rail_w(drag.latest)
+        }
     }
 
     function end_resize(e: React.PointerEvent<HTMLDivElement>) {
+        const drag = resizing.current
+
         e.currentTarget.classList.remove('active')
         resizing.current = null
+
+        if (!drag) return
+
+        // written once on release rather than on every move
+        try {
+            const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')
+            localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...saved, [drag.edge]: drag.latest }))
+        } catch {
+            // storage unavailable, the width just will not stick
+        }
     }
 
     // right-click target: the native webkit menu is off, this one replaces it
-    const context = (name: string) => (e: React.MouseEvent) => {
+    const context = (target: MenuTarget) => (e: React.MouseEvent) => {
         e.preventDefault()
         e.stopPropagation()
 
+        const height = target.kind === 'song' ? 230 : target.kind === 'playlist' ? 150 : 70
+
+        set_submenu(false)
         set_menu({
-            x: Math.min(e.clientX, window.innerWidth - 190),
-            y: Math.min(e.clientY, window.innerHeight - 140),
-            song: name,
+            ...target,
+            x: Math.min(e.clientX, window.innerWidth - 220),
+            y: Math.min(e.clientY, Math.max(window.innerHeight - height, 8)),
         })
+    }
+
+    const song_context = (name: string) => context({ kind: 'song', song: name })
+
+    function open_dialog(next: Dialog) {
+        set_draft(next.mode === 'rename' ? next.playlist : '')
+        set_dialog(next)
+    }
+
+    async function commit_dialog() {
+        if (!dialog) return
+
+        set_dialog(null)
+
+        if (dialog.mode === 'rename') return rename_playlist(dialog.playlist, draft)
+
+        await create_playlist(draft)
+
+        // opened from a track: the point was to put that track somewhere new
+        if (dialog.song) await add_to_playlist(draft.trim(), dialog.song)
     }
 
     // local wrappers so call sites stay short
@@ -502,7 +815,12 @@ export default function App() {
     )
 
     const heart = (name: string, className?: string, size?: number) => (
-        <Heart liked={liked.has(name)} on_toggle={() => toggle_like(name)} className={className} size={size} />
+        <Heart
+            liked={liked.has(name)}
+            on_toggle={() => toggle_like(name)}
+            className={className}
+            size={size}
+        />
     )
 
     function track_rows(names: string[]) {
@@ -513,7 +831,7 @@ export default function App() {
                         key={name}
                         className='track'
                         onClick={() => play_music(name)}
-                        onContextMenu={context(name)}
+                        onContextMenu={song_context(name)}
                     >
                         {current === name ? (
                             <span className='eq'>
@@ -529,6 +847,36 @@ export default function App() {
                             <div className='muted ellipsis'>{artist_of(name)}</div>
                         </div>
                         {heart(name)}
+                    </div>
+                ))}
+            </div>
+        )
+    }
+
+    // the roomier playlist layout: cover, title/artist, album, added, length
+    function track_list(names: string[]) {
+        return (
+            <div className='track-list'>
+                {names.map((name) => (
+                    <div
+                        key={name}
+                        className={`row${current === name ? ' playing' : ''}`}
+                        onClick={() => play_music(name)}
+                        onContextMenu={song_context(name)}
+                    >
+                        {cover(name, 'row-cover')}
+
+                        <div className='track-meta'>
+                            <div className='name ellipsis'>{title_of(name)}</div>
+                            <div className='muted ellipsis'>{artist_of(name)}</div>
+                        </div>
+
+                        <div className='muted ellipsis row-album'>{album_of(name)}</div>
+                        <div className='muted row-added'>{format_date(added_of(name))}</div>
+
+                        {heart(name)}
+
+                        <div className='muted row-length'>{format_time(length_of(name))}</div>
                     </div>
                 ))}
             </div>
@@ -553,15 +901,25 @@ export default function App() {
         )
     }
 
-    const view_title = selection ?? NAV.find((item) => item.id === view)!.label
+    // pinned first, in the order they were pinned
+    const playlist_names = Object.keys(playlists).sort((a, b) => {
+        const rank = (name: string) => (pins.includes(name) ? pins.indexOf(name) : pins.length)
+        return rank(a) - rank(b)
+    })
+    // no room on the right half of the window, so the submenu opens leftwards there
+    const flip = !!menu && menu.x > window.innerWidth / 2
+    const view_title = selection ?? NAV.find((item) => item.id === view)?.label ?? 'Playlists'
 
     return (
         <div className='shell' onContextMenu={(e) => e.preventDefault()}>
             <div
                 className='frame'
-                style={{ gridTemplateColumns: `${sidebar_w}rem 1fr ${rail_w}rem` }}
+                ref={frame}
+                style={{
+                    gridTemplateColumns: `${column(SIDEBAR_BOUNDS, sidebar_w)} 1fr ${column(RAIL_BOUNDS, rail_w)}`,
+                }}
             >
-                <aside className='sidebar'>
+                <aside className='sidebar' onContextMenu={context({ kind: 'sidebar' })}>
                     <div className='brand'>
                         <span className='brand-mark'>
                             <i />
@@ -584,6 +942,43 @@ export default function App() {
                         </button>
                     ))}
 
+                    <div className='nav-label playlists-label'>
+                        Playlists
+                        <button
+                            className='icon-btn tiny'
+                            title='New playlist'
+                            onClick={() => open_dialog({ mode: 'create' })}
+                        >
+                            <Icon d={ICONS.plus} size={14} />
+                        </button>
+                    </div>
+
+                    {playlist_names.length ? (
+                        playlist_names.map((name) => (
+                            <button
+                                key={name}
+                                className={`nav-item${view === 'playlist' && selection === name ? ' active' : ''}`}
+                                onClick={() => {
+                                    set_view('playlist')
+                                    set_selection(name)
+                                }}
+                                onContextMenu={context({ kind: 'playlist', playlist: name })}
+                            >
+                                {pins.includes(name) ? (
+                                    <span className='pinned' title='Pinned'>
+                                        <Icon d={ICONS.pin} size={17} fill />
+                                    </span>
+                                ) : (
+                                    <Icon d={ICONS.playlist} />
+                                )}
+                                <span className='ellipsis'>{name}</span>
+                                <span className='nav-count'>{playlists[name].length}</span>
+                            </button>
+                        ))
+                    ) : (
+                        <p className='nav-hint'>Right-click here to add one.</p>
+                    )}
+
                     <div className='sidebar-foot'>
                         <button className='pill-btn' onClick={fetch_songs} disabled={loading}>
                             <Icon d={ICONS.refresh} size={15} />
@@ -599,7 +994,11 @@ export default function App() {
                         onDoubleClick={() => bridge().window_zoom()}
                     >
                         <label className='search' onPointerDown={(e) => e.stopPropagation()}>
-                            <Icon d={ICONS.search} size={15} />
+                            {searching ? (
+                                <span className='spinner' />
+                            ) : (
+                                <Icon d={ICONS.search} size={15} />
+                            )}
                             <input
                                 placeholder='Search on youtube...'
                                 value={query}
@@ -613,11 +1012,23 @@ export default function App() {
                             onPointerDown={(e) => e.stopPropagation()}
                             title={`Theme: ${theme}`}
                             onClick={() =>
-                                set_theme(theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system')
+                                set_theme(
+                                    theme === 'system'
+                                        ? 'light'
+                                        : theme === 'light'
+                                          ? 'dark'
+                                          : 'system',
+                                )
                             }
                         >
                             <Icon
-                                d={theme === 'system' ? ICONS.system : theme === 'light' ? ICONS.sun : ICONS.moon}
+                                d={
+                                    theme === 'system'
+                                        ? ICONS.system
+                                        : theme === 'light'
+                                          ? ICONS.sun
+                                          : ICONS.moon
+                                }
                             />
                         </button>
                     </div>
@@ -641,11 +1052,15 @@ export default function App() {
                                                 key={name}
                                                 className='track'
                                                 onClick={() => play_music(name)}
-                                                onContextMenu={context(name)}
+                                                onContextMenu={song_context(name)}
                                             >
                                                 <div className='track-meta'>
-                                                    <div className='name ellipsis'>{title_of(name)}</div>
-                                                    <div className='muted ellipsis'>{artist_of(name)}</div>
+                                                    <div className='name ellipsis'>
+                                                        {title_of(name)}
+                                                    </div>
+                                                    <div className='muted ellipsis'>
+                                                        {artist_of(name)}
+                                                    </div>
                                                 </div>
                                                 {heart(name)}
                                             </div>
@@ -657,7 +1072,7 @@ export default function App() {
                     )}
 
                     <div className='view-head'>
-                        {selection && (
+                        {selection && groups && (
                             <button
                                 className='icon-btn back'
                                 title='Back'
@@ -672,6 +1087,57 @@ export default function App() {
                                 ? `${groups.size} ${view === 'albums' ? 'albums' : 'artists'}`
                                 : `${listed.length} tracks`}
                         </span>
+
+                        {view === 'playlist' && (
+                            <div className='filter-wrap'>
+                                <button
+                                    className={`icon-btn filter${filters ? ' on' : ''}`}
+                                    title='Sort and view'
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        set_filters(!filters)
+                                    }}
+                                >
+                                    <Icon d={ICONS.filter} size={16} />
+                                </button>
+
+                                {filters && (
+                                    <div className='filter-menu' onClick={(e) => e.stopPropagation()}>
+                                        <div className='filter-label'>Sort by</div>
+                                        {SORTS.map((option) => (
+                                            <button
+                                                key={option.id}
+                                                onClick={() => {
+                                                    set_sort(option.id)
+                                                    save_pref('sort', option.id)
+                                                }}
+                                            >
+                                                <span className='ellipsis'>{option.label}</span>
+                                                {sort === option.id && <Icon d={ICONS.check} size={14} />}
+                                            </button>
+                                        ))}
+
+                                        <div className='context-sep' />
+
+                                        <div className='filter-label'>View as</div>
+                                        {LAYOUTS.map((option) => (
+                                            <button
+                                                key={option.id}
+                                                onClick={() => {
+                                                    set_track_layout(option.id)
+                                                    save_pref('track_layout', option.id)
+                                                }}
+                                            >
+                                                <span className='ellipsis'>{option.label}</span>
+                                                {track_layout === option.id && (
+                                                    <Icon d={ICONS.check} size={14} />
+                                                )}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {groups && !selection ? (
@@ -682,7 +1148,11 @@ export default function App() {
                         )
                     ) : listed.length ? (
                         selection ? (
-                            track_rows(listed)
+                            view === 'playlist' && track_layout === 'list' ? (
+                                track_list(listed)
+                            ) : (
+                                track_rows(listed)
+                            )
                         ) : (
                             <section className='card-row'>
                                 {listed.map((name) => (
@@ -690,7 +1160,7 @@ export default function App() {
                                         key={name}
                                         className='album'
                                         onClick={() => play_music(name)}
-                                        onContextMenu={context(name)}
+                                        onContextMenu={song_context(name)}
                                     >
                                         {cover(name, 'album-cover')}
                                         {heart(name)}
@@ -706,7 +1176,9 @@ export default function App() {
                                 ? 'Scanning your library...'
                                 : view === 'liked'
                                   ? 'No liked songs yet.'
-                                  : `No mp3 files found in ${FILE_PATH}`}
+                                  : view === 'playlist'
+                                    ? 'This playlist is empty. Right-click a track to add it.'
+                                    : `No mp3 files found in ${FILE_PATH}`}
                         </p>
                     )}
                 </main>
@@ -715,7 +1187,17 @@ export default function App() {
                     <section>
                         <h2 className='section-title'>Search Results</h2>
 
-                        {searching && <p className='muted'>Searching youtube...</p>}
+                        {searching &&
+                            Array.from({ length: 5 }, (_, i) => (
+                                <div key={i} className='result skeleton'>
+                                    <div className='placeholder' />
+                                    <div className='result-meta'>
+                                        <div className='bar' />
+                                        <div className='bar short' />
+                                    </div>
+                                </div>
+                            ))}
+
                         {!searching && !results.length && (
                             <p className='muted'>Search youtube to download a track.</p>
                         )}
@@ -728,7 +1210,10 @@ export default function App() {
                                 onClick={() => download(result.id)}
                                 disabled={downloading !== null}
                             >
-                                <img src={`https://img.youtube.com/vi/${result.id}/mqdefault.jpg`} alt='' />
+                                <img
+                                    src={`https://img.youtube.com/vi/${result.id}/mqdefault.jpg`}
+                                    alt=''
+                                />
                                 <div className='result-meta'>
                                     <div className='name ellipsis'>{result.title}</div>
                                     <div className='muted'>
@@ -752,7 +1237,7 @@ export default function App() {
                                     key={name}
                                     className='result'
                                     onClick={() => play_music(name)}
-                                    onContextMenu={context(name)}
+                                    onContextMenu={song_context(name)}
                                 >
                                     {cover(name, '')}
                                     <div className='result-meta'>
@@ -767,7 +1252,7 @@ export default function App() {
 
                 <div
                     className='resizer'
-                    style={{ left: `${sidebar_w}rem` }}
+                    style={{ left: `calc(${column(SIDEBAR_BOUNDS, sidebar_w)} + var(--gutter) / 2)` }}
                     onPointerDown={start_resize('sidebar')}
                     onPointerMove={move_resize}
                     onPointerUp={end_resize}
@@ -775,7 +1260,9 @@ export default function App() {
                 />
                 <div
                     className='resizer'
-                    style={{ left: `calc(100% - ${rail_w}rem)` }}
+                    style={{
+                        left: `calc(100% - ${column(RAIL_BOUNDS, rail_w)} - var(--gutter) / 2)`,
+                    }}
                     onPointerDown={start_resize('rail')}
                     onPointerMove={move_resize}
                     onPointerUp={end_resize}
@@ -785,19 +1272,164 @@ export default function App() {
 
             {menu && (
                 <div className='context-menu' style={{ left: menu.x, top: menu.y }}>
-                    <div className='context-head ellipsis'>{title_of(menu.song)}</div>
-                    <button onClick={() => play_music(menu.song)}>
-                        <Icon d={ICONS.play} size={15} fill />
-                        Play
-                    </button>
-                    <button onClick={() => toggle_like(menu.song)}>
-                        <Icon d={ICONS.heart} size={15} fill={liked.has(menu.song)} />
-                        {liked.has(menu.song) ? 'Remove from liked' : 'Add to liked'}
-                    </button>
-                    <button className='danger' onClick={() => remove_song(menu.song)}>
-                        <Icon d={ICONS.trash} size={15} />
-                        Delete from disk
-                    </button>
+                    {menu.kind === 'song' && (
+                        <>
+                            <div className='context-head ellipsis'>{title_of(menu.song)}</div>
+                            <button onClick={() => play_music(menu.song)}>
+                                <Icon d={ICONS.play} size={15} fill />
+                                Play
+                            </button>
+                            <button onClick={() => toggle_like(menu.song)}>
+                                <Icon d={ICONS.heart} size={15} fill={liked.has(menu.song)} />
+                                {liked.has(menu.song) ? 'Remove from liked' : 'Add to liked'}
+                            </button>
+
+                            {view === 'playlist' && selection && (
+                                <button onClick={() => remove_from_playlist(selection, menu.song)}>
+                                    <Icon d={ICONS.minus} size={15} />
+                                    Remove from {selection}
+                                </button>
+                            )}
+
+                            <div className='context-sep' />
+                            <div
+                                className='submenu-wrap'
+                                onMouseEnter={() => set_submenu(true)}
+                                onMouseLeave={() => set_submenu(false)}
+                            >
+                                <button
+                                    className={`submenu-item${submenu ? ' open' : ''}`}
+                                    // the menu closes on any click, so this one has to stay put
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <Icon d={ICONS.plus} size={15} />
+                                    Add to
+                                    <Icon d={ICONS.chevron} size={14} />
+                                </button>
+
+                                {submenu && (
+                                    <div className={`context-menu submenu${flip ? ' flip' : ''}`}>
+                                        <button onClick={() => toggle_like(menu.song)}>
+                                            <Icon
+                                                d={ICONS.heart}
+                                                size={15}
+                                                fill={liked.has(menu.song)}
+                                            />
+                                            <span className='ellipsis'>Liked Songs</span>
+                                            {liked.has(menu.song) && (
+                                                <Icon d={ICONS.check} size={14} />
+                                            )}
+                                        </button>
+
+                                        {playlist_names.length > 0 && (
+                                            <div className='context-sep' />
+                                        )}
+
+                                        {playlist_names.map((name) => {
+                                            const inside = playlists[name].includes(menu.song)
+
+                                            return (
+                                                <button
+                                                    key={name}
+                                                    onClick={() =>
+                                                        inside
+                                                            ? remove_from_playlist(name, menu.song)
+                                                            : add_to_playlist(name, menu.song)
+                                                    }
+                                                >
+                                                    <Icon d={ICONS.playlist} size={15} />
+                                                    <span className='ellipsis'>{name}</span>
+                                                    {inside && <Icon d={ICONS.check} size={14} />}
+                                                </button>
+                                            )
+                                        })}
+
+                                        <div className='context-sep' />
+                                        <button
+                                            onClick={() =>
+                                                open_dialog({ mode: 'create', song: menu.song })
+                                            }
+                                        >
+                                            <Icon d={ICONS.plus} size={15} />
+                                            <span className='ellipsis'>New playlist</span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className='context-sep' />
+                            <button className='danger' onClick={() => remove_song(menu.song)}>
+                                <Icon d={ICONS.trash} size={15} />
+                                Delete from disk
+                            </button>
+                        </>
+                    )}
+
+                    {menu.kind === 'playlist' && (
+                        <>
+                            <div className='context-head ellipsis'>{menu.playlist}</div>
+                            <button onClick={() => toggle_pin(menu.playlist)}>
+                                <Icon d={ICONS.pin} size={15} />
+                                {pins.includes(menu.playlist) ? 'Unpin playlist' : 'Pin playlist'}
+                            </button>
+                            <button
+                                onClick={() =>
+                                    open_dialog({ mode: 'rename', playlist: menu.playlist })
+                                }
+                            >
+                                <Icon d={ICONS.rename} size={15} />
+                                Rename
+                            </button>
+                            <button
+                                className='danger'
+                                onClick={() => delete_playlist(menu.playlist)}
+                            >
+                                <Icon d={ICONS.trash} size={15} />
+                                Delete playlist
+                            </button>
+                        </>
+                    )}
+
+                    {menu.kind === 'sidebar' && (
+                        <button onClick={() => open_dialog({ mode: 'create' })}>
+                            <Icon d={ICONS.plus} size={15} />
+                            New playlist
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {dialog && (
+                <div className='overlay' onClick={() => set_dialog(null)}>
+                    <div className='dialog' onClick={(e) => e.stopPropagation()}>
+                        <h3>
+                            {dialog.mode === 'create'
+                                ? 'New playlist'
+                                : `Rename ${dialog.playlist}`}
+                        </h3>
+                        <input
+                            autoFocus
+                            placeholder='Playlist name'
+                            value={draft}
+                            onChange={(e) => set_draft(e.currentTarget.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') commit_dialog()
+                                if (e.key === 'Escape') set_dialog(null)
+                            }}
+                        />
+                        <div className='dialog-actions'>
+                            <button className='pill-btn' onClick={() => set_dialog(null)}>
+                                Cancel
+                            </button>
+                            <button
+                                className='pill-btn primary'
+                                onClick={commit_dialog}
+                                disabled={!draft.trim()}
+                            >
+                                {dialog.mode === 'create' ? 'Create' : 'Rename'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -820,7 +1452,7 @@ export default function App() {
 
                 <div
                     className='playing-info'
-                    onContextMenu={current ? context(current) : undefined}
+                    onContextMenu={current ? song_context(current) : undefined}
                 >
                     {current ? (
                         <>

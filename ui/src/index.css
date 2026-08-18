@@ -12,7 +12,7 @@ body,
 
 /* every measurement in the app is in rem, so this scales the whole ui with the window */
 html {
-  font-size: clamp(15px, 0.48vw + 10.8px, 22px);
+  font-size: clamp(15px, 0.24vw + 13.4px, 19px);
 }
 
 body {
