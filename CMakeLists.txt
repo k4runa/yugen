@@ -27,9 +27,17 @@ FetchContent_Declare(
     GIT_TAG v8.0.5
 )
 
+FetchContent_Declare(
+  json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG v3.11.3
+)
+
 FetchContent_MakeAvailable(saucer)
+FetchContent_MakeAvailable(json)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE saucer::saucer)
+target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${TAGLIB_LIBRARIES})
 
 install(TARGETS yugen DESTINATION bin)
