@@ -14,10 +14,12 @@
     --danger: #c62828;
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     --skeleton: #e0e0e0;
+    --search: #fbfbfb;
     --pin: #2f8f57;
     --scroll: rgba(0, 0, 0, 0.24);
 
     --gutter: 0.5rem;
+    --search-h: 2.75rem;
 }
 
 /* no explicit choice: follow the system */
@@ -38,6 +40,7 @@
         --danger: #ef5350;
         --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
         --skeleton: #242424;
+        --search: #141414;
         --pin: #7bd88f;
         --scroll: rgba(255, 255, 255, 0.22);
     }
@@ -59,18 +62,13 @@
     --danger: #ef5350;
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     --skeleton: #242424;
+    --search: #141414;
     --pin: #7bd88f;
     --scroll: rgba(255, 255, 255, 0.22);
 }
 
 button {
     outline: none;
-}
-
-/* keyboard-only focus ring, kept quiet enough not to fight the active state */
-button:focus-visible {
-    outline: 2px solid var(--text-dim);
-    outline-offset: 2px;
 }
 
 .shell {
@@ -295,23 +293,88 @@ button:focus-visible {
     overflow-y: auto;
 }
 
+/* nothing else lives up here, so the search is simply centred */
 .topbar {
     display: flex;
-    align-items: center;
-    gap: 1rem;
+    justify-content: center;
     margin-bottom: 1.5rem;
 }
 
+.search-slot {
+    position: relative;
+    width: min(44rem, 100%);
+    height: var(--search-h);
+    z-index: 25;
+}
+
+/* the bar and its results are one box, so there is no seam to line up */
 .search {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 0.875rem;
+    background: var(--search);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+    overflow: hidden;
+    cursor: text;
+    transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+.search:hover {
+    border-color: var(--text-dim);
+}
+
+.search.open {
+    border-color: var(--text-dim);
+    box-shadow: var(--shadow);
+}
+
+.search-row {
     display: flex;
     align-items: center;
     gap: 0.5625rem;
-    flex: 1;
-    max-width: 21.25rem;
-    padding: 0.5625rem 0.875rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--card-strong);
+    height: calc(var(--search-h) - 2px);
+    padding: 0 1rem;
+}
+
+.search-drop {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-top: 1px solid var(--line);
+    transform-origin: top center;
+    animation: unfold 0.16s ease-out;
+}
+
+/* it reads as the box growing downwards, not a card dropping in */
+@keyframes unfold {
+    from {
+        opacity: 0.4;
+        transform: scaleY(0.55);
+    }
+}
+
+.search .clear {
+    display: grid;
+    place-items: center;
+    flex: none;
+    padding: 0.1875rem;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.search .clear:hover {
+    background: var(--hover);
+    color: var(--text);
 }
 
 .search .ico {
@@ -507,8 +570,7 @@ button:focus-visible {
 }
 
 .track:hover .heart,
-.album:hover .heart,
-.heart:focus-visible {
+.album:hover .heart {
     opacity: 1;
 }
 
@@ -927,7 +989,7 @@ button:focus-visible {
 .player-right {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.625rem;
     width: 14.375rem;
     flex: none;
     justify-content: flex-end;
@@ -967,10 +1029,19 @@ button:focus-visible {
 
 /* ---------- playlists ---------- */
 
-.playlists-label {
+.library-label {
     display: flex;
     align-items: center;
-    margin-top: 1.125rem;
+    gap: 0.125rem;
+    padding-right: 0.125rem;
+}
+
+/* anchored to the viewport, so the sidebar's overflow cannot clip it */
+.filter-menu.floating {
+    position: fixed;
+    top: auto;
+    right: auto;
+    z-index: 25;
 }
 
 .icon-btn.tiny {
@@ -1222,4 +1293,186 @@ button:focus-visible {
     .track-list .row-added {
         display: none;
     }
+}
+
+/* ---------- library view modes ---------- */
+
+.playlist-item.compact {
+    padding-top: 0.3125rem;
+    padding-bottom: 0.3125rem;
+    font-size: 0.8125rem;
+}
+
+.playlist-cover {
+    width: 1.625rem;
+    height: 1.625rem;
+    flex: none;
+    border-radius: 0.3125rem;
+    object-fit: cover;
+}
+
+.playlist-item.list {
+    padding-top: 0.375rem;
+    padding-bottom: 0.375rem;
+}
+
+.playlist-grid {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.25rem 0.125rem 0;
+}
+
+.playlist-grid.grid {
+    grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+}
+
+.playlist-grid.compact-grid {
+    grid-template-columns: repeat(auto-fill, minmax(3.75rem, 1fr));
+}
+
+.tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    min-width: 0;
+    padding: 0.375rem;
+    border: 1px solid transparent;
+    border-radius: 0.5625rem;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.tile:hover:not(.active) {
+    background: var(--hover);
+}
+
+.tile.active {
+    border-color: var(--border);
+    background: var(--card-strong);
+}
+
+.tile-cover {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 0.4375rem;
+    object-fit: cover;
+}
+
+.tile-name {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+}
+
+.playlist-grid.compact-grid .tile-name {
+    font-size: 0.6875rem;
+}
+
+.tile .pinned {
+    flex: none;
+}
+
+/* ---------- collapsing the side panels ---------- */
+
+.brand .collapse {
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.sidebar:hover .brand .collapse {
+    opacity: 1;
+}
+
+.rail-head {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: -0.75rem;
+}
+
+.rail-head .icon-btn {
+    color: var(--text-dim);
+}
+
+/* the strip that brings a hidden panel back, sitting on the frame edge */
+.edge-toggle {
+    position: absolute;
+    top: 50%;
+    z-index: 15;
+    display: grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 4.5rem;
+    transform: translateY(-50%);
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.edge-toggle:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+.edge-toggle.left {
+    left: 0;
+    border-left: none;
+    border-radius: 0 0.5rem 0.5rem 0;
+}
+
+.edge-toggle.right {
+    right: 0;
+    border-right: none;
+    border-radius: 0.5rem 0 0 0.5rem;
+}
+
+/* ---------- search dropdown ---------- */
+
+.source-tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.625rem 0.75rem 0.5rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.source-tabs button {
+    padding: 0.3125rem 0.75rem;
+    border: none;
+    border-radius: 999px;
+    background: none;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.source-tabs button:hover {
+    color: var(--text);
+}
+
+.source-tabs button.active {
+    background: var(--accent-soft);
+    color: var(--text);
+}
+
+.search-body {
+    padding: 0.375rem 0.5rem 0.5rem;
+    max-height: min(24rem, 55vh);
+    overflow-y: auto;
+}
+
+.search-body .empty-row {
+    margin: 0;
+    padding: 1.125rem 0.625rem;
+    text-align: center;
+    font-size: 0.8125rem;
 }

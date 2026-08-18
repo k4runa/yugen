@@ -8,11 +8,22 @@ const LAYOUT_KEY = 'yugen.layout'
 // the rem pair is the floor/ceiling css clamps them to at extreme window sizes.
 const SIDEBAR_RANGE = [8, 26] as const
 const RAIL_RANGE = [10, 30] as const
-const SIDEBAR_BOUNDS = ['9rem', '22rem'] as const
-const RAIL_BOUNDS = ['10rem', '26rem'] as const
+const SIDEBAR_BOUNDS = [9, 22] as const
+const RAIL_BOUNDS = [10, 26] as const
 
-const column = ([min, max]: readonly [string, string], percent: number) =>
-    `clamp(${min}, ${percent}%, ${max})`
+// how much room the main column needs before the right rail is in the way
+const MAIN_MIN = 34
+
+const column = ([min, max]: readonly [number, number], percent: number) =>
+    `clamp(${min}rem, ${percent}%, ${max}rem)`
+
+// what the css clamp above resolves to, in px
+const column_px = (
+    [min, max]: readonly [number, number],
+    percent: number,
+    frame: number,
+    rem: number,
+) => Math.min(Math.max((frame * percent) / 100, min * rem), max * rem)
 
 const clamp = (value: number, [min, max]: readonly [number, number]) =>
     Math.min(Math.max(value, min), max)
@@ -37,6 +48,15 @@ function stored_pref<T extends string>(key: string, allowed: readonly T[], fallb
 }
 
 // pinned playlists live here rather than in playlists.json, which has no field for them
+function stored_flag(key: string, fallback: boolean) {
+    try {
+        const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')[key]
+        return typeof value === 'boolean' ? value : fallback
+    } catch {
+        return fallback
+    }
+}
+
 function stored_pins(): string[] {
     try {
         const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}').pins
@@ -46,7 +66,7 @@ function stored_pins(): string[] {
     }
 }
 
-function save_pref(key: string, value: string | string[]) {
+function save_pref(key: string, value: string | string[] | boolean) {
     try {
         const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')
         localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...saved, [key]: value }))
@@ -81,10 +101,38 @@ const LAYOUTS: { id: Layout; label: string }[] = [
     { id: 'compact', label: 'Compact' },
 ]
 
+type LibraryView = 'compact' | 'list' | 'compact-grid' | 'grid'
+
+const LIBRARY_VIEWS: { id: LibraryView; label: string }[] = [
+    { id: 'compact', label: 'Compact' },
+    { id: 'list', label: 'List' },
+    { id: 'compact-grid', label: 'Compact grid' },
+    { id: 'grid', label: 'Default grid' },
+]
+
+type Source = 'yt' | 'sc'
+
 type SearchResult = {
     title: string
-    id: string
+    // a video id on youtube, the track's page url on soundcloud
+    ref: string
+    thumbnail?: string
 }
+
+const SOURCES: { id: Source; label: string }[] = [
+    { id: 'yt', label: 'YouTube' },
+    { id: 'sc', label: 'SoundCloud' },
+]
+
+// what the source prints per result, and the shape of its second field: an
+// 11-character video id on youtube, the track's page url on soundcloud
+const SHAPE: Record<Source, { fields: number; ref: RegExp }> = {
+    yt: { fields: 2, ref: /^[\w-]{11}$/ },
+    sc: { fields: 3, ref: /^https?:\/\/(www\.)?soundcloud\.com\/.+/ },
+}
+
+// yt-dlp prints NA for anything the flat listing does not carry
+const printed = (value?: string) => (value && value !== 'NA' ? value : undefined)
 
 // the functions main.cpp exposes through saucer
 type Bridge = {
@@ -97,8 +145,10 @@ type Bridge = {
     stop(): Promise<void>
     resume(): Promise<void>
     toggle_loop(state: boolean): Promise<void>
-    search(query: string, count: number): Promise<string[]>
-    download(id: string, path: string): Promise<string>
+    search_yt(query: string, count: number): Promise<string[]>
+    search_sc(query: string, count: number): Promise<string[]>
+    download_yt(id: string, path: string): Promise<string>
+    download_sc(url: string, path: string): Promise<string>
     shuffle(songs: string[]): Promise<string[]>
     next(): Promise<string>
     prev(): Promise<string>
@@ -231,6 +281,7 @@ const ICONS = {
     chevron: 'M9 5l7 7-7 7',
     check: 'M4.5 12.5 9 17l10.5-10.5',
     filter: 'M4 6h16M7 12h10M10 18h4',
+    close: 'M6 6l12 12M18 6 6 18',
     pin: 'M8 3h8v2h-1l1 6h1v2h-4v6h-2v-6H7v-2h1l1-6H8z',
     clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 7v5l3.5 2',
 }
@@ -275,10 +326,19 @@ export default function App() {
     const [playlists, set_playlists] = useState<Record<string, string[]>>({})
     const [pins, set_pins] = useState<string[]>(stored_pins)
 
+    const [library_menu, set_library_menu] = useState<{ x: number; y: number } | null>(null)
+    const [library_view, set_library_view] = useState<LibraryView>(() =>
+        stored_pref('library_view', LIBRARY_VIEWS.map((o) => o.id), 'list'),
+    )
+
     // column widths are percentages of the frame, so they follow every window resize
     const [sidebar_w, set_sidebar_w] = useState(() => stored_width('sidebar', 13, SIDEBAR_RANGE))
     const [rail_w, set_rail_w] = useState(() => stored_width('rail', 17, RAIL_RANGE))
     const frame = useRef<HTMLDivElement>(null)
+    const [frame_w, set_frame_w] = useState(0)
+
+    const [sidebar_hidden, set_sidebar_hidden] = useState(() => stored_flag('sidebar_hidden', false))
+    const [rail_hidden, set_rail_hidden] = useState(() => stored_flag('rail_hidden', false))
     const resizing = useRef<{
         edge: 'sidebar' | 'rail'
         from: number
@@ -290,12 +350,60 @@ export default function App() {
     const [searching, set_searching] = useState(false)
     const [results, set_results] = useState<SearchResult[]>([])
     const [downloading, set_downloading] = useState<string | null>(null)
+    const [source, set_source] = useState<Source>('yt')
+    const [search_open, set_search_open] = useState(false)
+
+
+    useEffect(() => {
+        const element = frame.current
+        if (!element) return
+
+        const observer = new ResizeObserver(([entry]) =>
+            set_frame_w(entry.contentRect.width),
+        )
+
+        observer.observe(element)
+
+        return () => observer.disconnect()
+    }, [])
 
     useEffect(() => {
         // with no attribute the stylesheet falls back to prefers-color-scheme
         if (theme === 'system') delete document.documentElement.dataset.theme
         else document.documentElement.dataset.theme = theme
     }, [theme])
+
+    useEffect(() => {
+        if (!search_open) return
+
+        const close = () => set_search_open(false)
+        const on_key = (e: KeyboardEvent) => e.key === 'Escape' && close()
+
+        window.addEventListener('click', close)
+        window.addEventListener('keydown', on_key)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('keydown', on_key)
+        }
+    }, [search_open])
+
+    useEffect(() => {
+        if (!library_menu) return
+
+        const close = () => set_library_menu(null)
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+        // it is pinned to the viewport, so a scrolling sidebar would leave it behind
+        document.addEventListener('scroll', close, true)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+            document.removeEventListener('scroll', close, true)
+        }
+    }, [library_menu])
 
     useEffect(() => {
         if (!filters) return
@@ -551,30 +659,55 @@ export default function App() {
         play_music(queue[(index + offset + queue.length) % queue.length])
     }
 
-    async function search() {
+    async function search(on: Source = source) {
         if (!query.trim()) return
 
         set_searching(true)
-        // yt-dlp prints a flat [title, id, title, id, ...] list
-        const flat: string[] = await bridge().search(query, 10)
+        set_search_open(true)
+
+        // both searches print one flat list, a fixed number of lines per result
+        const flat: string[] =
+            on === 'yt' ? await bridge().search_yt(query, 10) : await bridge().search_sc(query, 10)
+
+        const { fields, ref } = SHAPE[on]
 
         set_results(
-            Array.from({ length: Math.floor(flat.length / 2) }, (_, i) => ({
-                title: flat[i * 2],
-                id: flat[i * 2 + 1],
+            Array.from({ length: Math.floor(flat.length / fields) }, (_, i) => ({
+                title: flat[i * fields],
+                ref: flat[i * fields + 1],
+                thumbnail: printed(flat[i * fields + 2]),
             }))
-                // a flat search also returns channels and playlists; only video ids are 11 chars
-                .filter((result) => /^[\w-]{11}$/.test(result.id)),
+                // a flat search also turns up channels and playlists, which are not tracks
+                .filter((result) => ref.test(result.ref)),
         )
         set_searching(false)
     }
 
-    async function download(id: string) {
-        set_downloading(id)
-        await bridge().download(id, FILE_PATH)
+    // soundcloud sends an artwork url, youtube's is built from the video id
+    const artwork = (result: SearchResult) =>
+        source === 'yt' ? `https://img.youtube.com/vi/${result.ref}/mqdefault.jpg` : result.thumbnail
+
+    function switch_source(next: Source) {
+        set_source(next)
+        set_results([])
+
+        if (query.trim()) search(next)
+    }
+
+    async function download(result: SearchResult) {
+        set_downloading(result.ref)
+
+        if (source === 'yt') await bridge().download_yt(result.ref, FILE_PATH)
+        else await bridge().download_sc(result.ref, FILE_PATH)
+
         set_downloading(null)
         await fetch_songs()
         await sync_liked()
+    }
+
+    function open_playlist(name: string) {
+        set_view('playlist')
+        set_selection(name)
     }
 
     function open_view(next: View) {
@@ -718,6 +851,34 @@ export default function App() {
     ]
 
     const frame_width = () => frame.current?.getBoundingClientRect().width || window.innerWidth
+
+    const rem = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+
+    // measured against what main would get with the rail open, so toggling it cannot oscillate
+    const room_for_rail = () => {
+        if (!frame_w) return true
+
+        const unit = rem()
+        const gutter = 0.5 * unit
+        const left = sidebar_hidden ? 0 : column_px(SIDEBAR_BOUNDS, sidebar_w, frame_w, unit)
+        const right = column_px(RAIL_BOUNDS, rail_w, frame_w, unit)
+
+        return frame_w - left - right - 2 * gutter >= MAIN_MIN * unit
+    }
+
+    const cramped = !room_for_rail()
+    const sidebar_open = !sidebar_hidden
+    const rail_open = !rail_hidden && !cramped
+
+    function toggle_sidebar() {
+        set_sidebar_hidden(!sidebar_hidden)
+        save_pref('sidebar_hidden', !sidebar_hidden)
+    }
+
+    function toggle_rail() {
+        set_rail_hidden(!rail_hidden)
+        save_pref('rail_hidden', !rail_hidden)
+    }
 
     const start_resize = (edge: 'sidebar' | 'rail') => (e: React.PointerEvent<HTMLDivElement>) => {
         e.preventDefault()
@@ -901,11 +1062,16 @@ export default function App() {
         )
     }
 
-    // pinned first, in the order they were pinned
+    // pinned first in the order they were pinned, the rest alphabetical
     const playlist_names = Object.keys(playlists).sort((a, b) => {
         const rank = (name: string) => (pins.includes(name) ? pins.indexOf(name) : pins.length)
-        return rank(a) - rank(b)
+
+        return rank(a) !== rank(b) ? rank(a) - rank(b) : a.localeCompare(b)
     })
+
+    // a playlist shows the cover of the first track that has one
+    const playlist_cover = (name: string) =>
+        (playlists[name] ?? []).find((track) => cover_of(track))
     // no room on the right half of the window, so the submenu opens leftwards there
     const flip = !!menu && menu.x > window.innerWidth / 2
     const view_title = selection ?? NAV.find((item) => item.id === view)?.label ?? 'Playlists'
@@ -916,76 +1082,131 @@ export default function App() {
                 className='frame'
                 ref={frame}
                 style={{
-                    gridTemplateColumns: `${column(SIDEBAR_BOUNDS, sidebar_w)} 1fr ${column(RAIL_BOUNDS, rail_w)}`,
+                    gridTemplateColumns: [
+                        sidebar_open && column(SIDEBAR_BOUNDS, sidebar_w),
+                        '1fr',
+                        rail_open && column(RAIL_BOUNDS, rail_w),
+                    ]
+                        .filter(Boolean)
+                        .join(' '),
                 }}
             >
-                <aside className='sidebar' onContextMenu={context({ kind: 'sidebar' })}>
-                    <div className='brand'>
-                        <span className='brand-mark'>
-                            <i />
-                            <i />
-                            <i />
-                        </span>
-                        yugen
-                    </div>
-
-                    <div className='nav-label'>My music</div>
-                    {NAV.map((item) => (
-                        <button
-                            key={item.id}
-                            className={`nav-item${view === item.id ? ' active' : ''}`}
-                            onClick={() => open_view(item.id)}
-                        >
-                            <Icon d={item.icon} />
-                            {item.label}
-                            <span className='nav-count'>{item.count}</span>
-                        </button>
-                    ))}
-
-                    <div className='nav-label playlists-label'>
-                        Playlists
-                        <button
-                            className='icon-btn tiny'
-                            title='New playlist'
-                            onClick={() => open_dialog({ mode: 'create' })}
-                        >
-                            <Icon d={ICONS.plus} size={14} />
-                        </button>
-                    </div>
-
-                    {playlist_names.length ? (
-                        playlist_names.map((name) => (
+                {sidebar_open && (
+                    <aside className='sidebar' onContextMenu={context({ kind: 'sidebar' })}>
+                        <div className='brand'>
+                            <span className='brand-mark'>
+                                <i />
+                                <i />
+                                <i />
+                            </span>
+                            yugen
                             <button
-                                key={name}
-                                className={`nav-item${view === 'playlist' && selection === name ? ' active' : ''}`}
-                                onClick={() => {
-                                    set_view('playlist')
-                                    set_selection(name)
-                                }}
-                                onContextMenu={context({ kind: 'playlist', playlist: name })}
+                                className='icon-btn tiny collapse'
+                                title='Hide sidebar'
+                                onClick={toggle_sidebar}
                             >
-                                {pins.includes(name) ? (
-                                    <span className='pinned' title='Pinned'>
-                                        <Icon d={ICONS.pin} size={17} fill />
-                                    </span>
-                                ) : (
-                                    <Icon d={ICONS.playlist} />
-                                )}
-                                <span className='ellipsis'>{name}</span>
-                                <span className='nav-count'>{playlists[name].length}</span>
+                                <Icon d={ICONS.back} size={16} />
                             </button>
-                        ))
-                    ) : (
-                        <p className='nav-hint'>Right-click here to add one.</p>
-                    )}
+                        </div>
 
-                    <div className='sidebar-foot'>
-                        <button className='pill-btn' onClick={fetch_songs} disabled={loading}>
-                            <Icon d={ICONS.refresh} size={15} />
-                            {loading ? 'Scanning...' : 'Refresh library'}
-                        </button>
-                    </div>
-                </aside>
+                        <div className='nav-label library-label'>
+                            Your Library
+                            <button
+                                className={`icon-btn tiny${library_menu ? ' on' : ''}`}
+                                title='View as'
+                                onClick={(e) => {
+                                    e.stopPropagation()
+
+                                    // the sidebar clips its overflow, so this one floats free
+                                    const rect = e.currentTarget.getBoundingClientRect()
+
+                                    set_library_menu(
+                                        library_menu
+                                            ? null
+                                            : {
+                                                  x: Math.min(rect.left, window.innerWidth - 200),
+                                                  y: rect.bottom + 6,
+                                              },
+                                    )
+                                }}
+                            >
+                                <Icon d={ICONS.filter} size={14} />
+                            </button>
+                        </div>
+
+                        {NAV.map((item) => (
+                            <button
+                                key={item.id}
+                                className={`nav-item${view === item.id ? ' active' : ''}`}
+                                onClick={() => open_view(item.id)}
+                            >
+                                <Icon d={item.icon} />
+                                {item.label}
+                                <span className='nav-count'>{item.count}</span>
+                            </button>
+                        ))}
+
+                        {playlist_names.length ? (
+                            library_view === 'compact-grid' || library_view === 'grid' ? (
+                                <div className={`playlist-grid ${library_view}`}>
+                                    {playlist_names.map((name) => (
+                                        <button
+                                            key={name}
+                                            className={`tile${
+                                                view === 'playlist' && selection === name ? ' active' : ''
+                                            }`}
+                                            title={name}
+                                            onClick={() => open_playlist(name)}
+                                            onContextMenu={context({ kind: 'playlist', playlist: name })}
+                                        >
+                                            {cover(playlist_cover(name) ?? '', 'tile-cover')}
+                                            <div className='tile-name ellipsis'>
+                                                {pins.includes(name) && (
+                                                    <span className='pinned' title='Pinned'>
+                                                        <Icon d={ICONS.pin} size={12} fill />
+                                                    </span>
+                                                )}
+                                                {name}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                playlist_names.map((name) => (
+                                    <button
+                                        key={name}
+                                        className={`nav-item playlist-item ${library_view}${
+                                            view === 'playlist' && selection === name ? ' active' : ''
+                                        }`}
+                                        onClick={() => open_playlist(name)}
+                                        onContextMenu={context({ kind: 'playlist', playlist: name })}
+                                    >
+                                        {pins.includes(name) ? (
+                                            <span className='pinned' title='Pinned'>
+                                                <Icon d={ICONS.pin} size={17} fill />
+                                            </span>
+                                        ) : (
+                                            // compact is text only
+                                            library_view === 'list' &&
+                                            cover(playlist_cover(name) ?? '', 'playlist-cover')
+                                        )}
+                                        <span className='ellipsis'>{name}</span>
+                                        <span className='nav-count'>{playlists[name].length}</span>
+                                    </button>
+                                ))
+                            )
+                        ) : (
+                            <p className='nav-hint'>Right-click here to add one.</p>
+                        )}
+
+                        <div className='sidebar-foot'>
+                            <button className='pill-btn' onClick={fetch_songs} disabled={loading}>
+                                <Icon d={ICONS.refresh} size={15} />
+                                {loading ? 'Scanning...' : 'Refresh library'}
+                            </button>
+                        </div>
+                    </aside>
+                )}
 
                 <main className='main'>
                     <div
@@ -993,44 +1214,119 @@ export default function App() {
                         onPointerDown={() => bridge().window_drag()}
                         onDoubleClick={() => bridge().window_zoom()}
                     >
-                        <label className='search' onPointerDown={(e) => e.stopPropagation()}>
-                            {searching ? (
-                                <span className='spinner' />
-                            ) : (
-                                <Icon d={ICONS.search} size={15} />
-                            )}
-                            <input
-                                placeholder='Search on youtube...'
-                                value={query}
-                                onChange={(e) => set_query(e.currentTarget.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && search()}
-                            />
-                        </label>
+                        <div className='search-slot'>
+                            <label
+                                className={`search${search_open ? ' open' : ''}`}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    set_search_open(true)
+                                }}
+                            >
+                                <div className='search-row'>
+                                    {searching ? (
+                                        <span className='spinner' />
+                                    ) : (
+                                        <Icon d={ICONS.search} size={15} />
+                                    )}
+                                    <input
+                                        placeholder={'Search \\(^o^)/'}
+                                        value={query}
+                                        onChange={(e) => set_query(e.currentTarget.value)}
+                                        onFocus={() => set_search_open(true)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') search()
+                                            if (e.key === 'Escape') set_search_open(false)
+                                        }}
+                                    />
+                                    {query && (
+                                        <button
+                                            className='clear'
+                                            title='Clear'
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                set_query('')
+                                                set_results([])
+                                            }}
+                                        >
+                                            <Icon d={ICONS.close} size={13} />
+                                        </button>
+                                    )}
+                                </div>
 
-                        <button
-                            className='icon-btn'
-                            onPointerDown={(e) => e.stopPropagation()}
-                            title={`Theme: ${theme}`}
-                            onClick={() =>
-                                set_theme(
-                                    theme === 'system'
-                                        ? 'light'
-                                        : theme === 'light'
-                                          ? 'dark'
-                                          : 'system',
-                                )
-                            }
-                        >
-                            <Icon
-                                d={
-                                    theme === 'system'
-                                        ? ICONS.system
-                                        : theme === 'light'
-                                          ? ICONS.sun
-                                          : ICONS.moon
-                                }
-                            />
-                        </button>
+                                {search_open && (
+                                    <div className='search-drop'>
+                                        <div className='source-tabs'>
+                                            {SOURCES.map((option) => (
+                                                <button
+                                                    key={option.id}
+                                                    className={source === option.id ? 'active' : ''}
+                                                    onClick={() => switch_source(option.id)}
+                                                >
+                                                    {option.label}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <div className='search-body'>
+                                            {searching &&
+                                                Array.from({ length: 5 }, (_, i) => (
+                                                    <div key={i} className='result skeleton'>
+                                                        <div className='placeholder' />
+                                                        <div className='result-meta'>
+                                                            <div className='bar' />
+                                                            <div className='bar short' />
+                                                        </div>
+                                                    </div>
+                                                ))}
+
+                                            {!searching && !results.length && (
+                                                <p className='muted empty-row'>
+                                                    {query.trim()
+                                                        ? 'Nothing found. Press enter to search again.'
+                                                        : 'Type something and press enter.'}
+                                                </p>
+                                            )}
+
+                                            {!searching &&
+                                                results.map((result) => (
+                                                    <button
+                                                        key={result.ref}
+                                                        className='result'
+                                                        title='Download'
+                                                        onClick={() => download(result)}
+                                                        disabled={downloading !== null}
+                                                    >
+                                                        {artwork(result) ? (
+                                                            <img src={artwork(result)} alt='' />
+                                                        ) : (
+                                                            <div className='placeholder'>♪</div>
+                                                        )}
+                                                        <div className='result-meta'>
+                                                            <div className='name ellipsis'>
+                                                                {result.title}
+                                                            </div>
+                                                            <div className='muted'>
+                                                                {downloading === result.ref
+                                                                    ? 'Downloading...'
+                                                                    : source === 'yt'
+                                                                      ? 'youtube'
+                                                                      : 'soundcloud'}
+                                                            </div>
+                                                        </div>
+                                                        {downloading === result.ref ? (
+                                                            <span className='spinner' />
+                                                        ) : (
+                                                            <Icon d={ICONS.download} size={15} />
+                                                        )}
+                                                    </button>
+                                                ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </label>
+                        </div>
+
                     </div>
 
                     {current && (
@@ -1183,91 +1479,73 @@ export default function App() {
                     )}
                 </main>
 
-                <aside className='rightbar'>
-                    <section>
-                        <h2 className='section-title'>Search Results</h2>
-
-                        {searching &&
-                            Array.from({ length: 5 }, (_, i) => (
-                                <div key={i} className='result skeleton'>
-                                    <div className='placeholder' />
-                                    <div className='result-meta'>
-                                        <div className='bar' />
-                                        <div className='bar short' />
-                                    </div>
-                                </div>
-                            ))}
-
-                        {!searching && !results.length && (
-                            <p className='muted'>Search youtube to download a track.</p>
-                        )}
-
-                        {results.map((result) => (
-                            <button
-                                key={result.id}
-                                className='result'
-                                title='Download'
-                                onClick={() => download(result.id)}
-                                disabled={downloading !== null}
-                            >
-                                <img
-                                    src={`https://img.youtube.com/vi/${result.id}/mqdefault.jpg`}
-                                    alt=''
-                                />
-                                <div className='result-meta'>
-                                    <div className='name ellipsis'>{result.title}</div>
-                                    <div className='muted'>
-                                        {downloading === result.id ? 'Downloading...' : 'youtube'}
-                                    </div>
-                                </div>
-                                {downloading === result.id ? (
-                                    <span className='spinner' />
-                                ) : (
-                                    <Icon d={ICONS.download} size={15} />
-                                )}
+                {rail_open && (
+                    <aside className='rightbar'>
+                        <div className='rail-head'>
+                            <button className='icon-btn tiny' title='Hide panel' onClick={toggle_rail}>
+                                <Icon d={ICONS.chevron} size={16} />
                             </button>
-                        ))}
-                    </section>
+                        </div>
 
-                    {liked_songs.length > 0 && (
-                        <section>
-                            <h2 className='section-title'>Liked Songs</h2>
-                            {liked_songs.map((name) => (
-                                <button
-                                    key={name}
-                                    className='result'
-                                    onClick={() => play_music(name)}
-                                    onContextMenu={song_context(name)}
-                                >
-                                    {cover(name, '')}
-                                    <div className='result-meta'>
-                                        <div className='name ellipsis'>{title_of(name)}</div>
-                                        <div className='muted ellipsis'>{artist_of(name)}</div>
-                                    </div>
-                                </button>
-                            ))}
-                        </section>
-                    )}
-                </aside>
+                        {liked_songs.length > 0 && (
+                            <section>
+                                <h2 className='section-title'>Liked Songs</h2>
+                                {liked_songs.map((name) => (
+                                    <button
+                                        key={name}
+                                        className='result'
+                                        onClick={() => play_music(name)}
+                                        onContextMenu={song_context(name)}
+                                    >
+                                        {cover(name, '')}
+                                        <div className='result-meta'>
+                                            <div className='name ellipsis'>{title_of(name)}</div>
+                                            <div className='muted ellipsis'>{artist_of(name)}</div>
+                                        </div>
+                                    </button>
+                                ))}
+                            </section>
+                        )}
+                    </aside>
+                )}
 
-                <div
-                    className='resizer'
-                    style={{ left: `calc(${column(SIDEBAR_BOUNDS, sidebar_w)} + var(--gutter) / 2)` }}
-                    onPointerDown={start_resize('sidebar')}
-                    onPointerMove={move_resize}
-                    onPointerUp={end_resize}
-                    onPointerCancel={end_resize}
-                />
-                <div
-                    className='resizer'
-                    style={{
-                        left: `calc(100% - ${column(RAIL_BOUNDS, rail_w)} - var(--gutter) / 2)`,
-                    }}
-                    onPointerDown={start_resize('rail')}
-                    onPointerMove={move_resize}
-                    onPointerUp={end_resize}
-                    onPointerCancel={end_resize}
-                />
+                {sidebar_open && (
+                    <div
+                        className='resizer'
+                        style={{
+                            left: `calc(${column(SIDEBAR_BOUNDS, sidebar_w)} + var(--gutter) / 2)`,
+                        }}
+                        onPointerDown={start_resize('sidebar')}
+                        onPointerMove={move_resize}
+                        onPointerUp={end_resize}
+                        onPointerCancel={end_resize}
+                    />
+                )}
+                {rail_open && (
+                    <div
+                        className='resizer'
+                        style={{
+                            left: `calc(100% - ${column(RAIL_BOUNDS, rail_w)} - var(--gutter) / 2)`,
+                        }}
+                        onPointerDown={start_resize('rail')}
+                        onPointerMove={move_resize}
+                        onPointerUp={end_resize}
+                        onPointerCancel={end_resize}
+                    />
+                )}
+
+                {!sidebar_open && (
+                    <button className='edge-toggle left' title='Show sidebar' onClick={toggle_sidebar}>
+                        <Icon d={ICONS.chevron} size={18} />
+                    </button>
+                )}
+
+                {/* while cramped the rail has nowhere to go, so no handle is offered */}
+                {rail_hidden && !cramped && (
+                    <button className='edge-toggle right' title='Show panel' onClick={toggle_rail}>
+                        <Icon d={ICONS.back} size={18} />
+                    </button>
+                )}
             </div>
 
             {menu && (
@@ -1399,6 +1677,28 @@ export default function App() {
                 </div>
             )}
 
+            {library_menu && (
+                <div
+                    className='filter-menu floating'
+                    style={{ left: library_menu.x, top: library_menu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className='filter-label'>View as</div>
+                    {LIBRARY_VIEWS.map((option) => (
+                        <button
+                            key={option.id}
+                            onClick={() => {
+                                set_library_view(option.id)
+                                save_pref('library_view', option.id)
+                            }}
+                        >
+                            <span className='ellipsis'>{option.label}</span>
+                            {library_view === option.id && <Icon d={ICONS.check} size={14} />}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             {dialog && (
                 <div className='overlay' onClick={() => set_dialog(null)}>
                     <div className='dialog' onClick={(e) => e.stopPropagation()}>
@@ -1514,6 +1814,26 @@ export default function App() {
                 </div>
 
                 <div className='player-right'>
+                    <button
+                        className='icon-btn tiny'
+                        title={`Theme: ${theme}`}
+                        onClick={() =>
+                            set_theme(
+                                theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system',
+                            )
+                        }
+                    >
+                        <Icon
+                            d={
+                                theme === 'system'
+                                    ? ICONS.system
+                                    : theme === 'light'
+                                      ? ICONS.sun
+                                      : ICONS.moon
+                            }
+                            size={15}
+                        />
+                    </button>
                     {format_time(position)} / {format_time(length)}
                 </div>
             </div>
