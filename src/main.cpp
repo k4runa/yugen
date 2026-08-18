@@ -1,4 +1,8 @@
+#include "saucer/executor.hpp"
 #include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
 #define MINIAUDIO_IMPLEMENTATION
 
 #include "coco/stray/stray.hpp"
@@ -63,12 +67,20 @@ coco::stray start(saucer::application *app)
           return yugen::get_cover(file_path);
      });
 
-     webview->expose("search", [&](const std::string& query,int count) -> std::vector<std::string> {
-          return yugen::search_youtube(query, count);
+     webview->expose("search", [&](std::string query, int count, saucer::executor<std::vector<std::string>> exec) {
+          std::thread t{[query, count, exec = std::move(exec)]() {
+               auto results = yugen::search_youtube(query, count);
+               exec.resolve(results);
+          }};
+          t.detach();
      });
 
-     webview->expose("download", [&](const std::string& id, const std::string& output_path) -> std::string {
-          return yugen::download_youtube(id, output_path);
+     webview->expose("download", [&](std::string id,  std::string output_path, saucer::executor<std::string> exec) {
+          std::thread t{[id, output_path, exec = std::move(exec)]() {
+               auto results = yugen::download_youtube(id, output_path);
+               exec.resolve(results);
+          }};
+          t.detach();
      });
 
 
