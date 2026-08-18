@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { MantineProvider } from '@mantine/core';
-import { Slider, Button, Group } from '@mantine/core';
+import { Slider, Button, Group, TextInput} from '@mantine/core';
 
 import '@mantine/core/styles.css';
 import './App.css'
@@ -15,7 +15,9 @@ export default function App()
     const [paused, set_paused] = useState<boolean>(false);
     const [looped, set_looped] = useState<boolean>(false);
     const [metadata_map, set_metadata_map] = useState<Record<string, string[]>>({});
+    const [search_results, set_search_results] = useState<string[]>([]);
     const [covers_map, set_covers_map] = useState<Record<string, string>>({});
+    const [query, set_query] = useState("");
     
     const icon = paused ? "▶" : "◼"; 
     const looped_icon = looped ? "👍️" : "👎️";
@@ -85,22 +87,41 @@ export default function App()
         set_paused(!paused);
     }
 
+    async function search() {
+        // @ts-ignore
+        const res = await window.saucer.exposed.search(query, 10);
+        set_search_results(res);
+    }
+
+    async function download(id: string) {
+        // @ts-ignore
+        await window.saucer.exposed.download(id, file_path);
+        await fetch_songs_on_click();
+    }
+
     return (
         <MantineProvider defaultColorScheme='dark'>
             <div className='app-container'>
                 <div className='sidebar'>
-                    {
-                        
-                    }
+                    <TextInput placeholder='Search on youtube...'  value={query} 
+                    onChange={(e) => set_query(e.currentTarget.value)}
+                    onKeyDown={(e) => {if (e.key === 'Enter') search();}} />
+                    {Array.from({length: Math.floor(search_results.length / 3)}, (_, i) => (
+                        <div key={i}  onClick={() => download(search_results[i * 3 + 1])} style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
+                            <img src={search_results[i * 3 + 2]} width={80} />
+                            <span>{search_results[i * 3]}</span>
+                        </div>
+                    ))}
                 </div>
                 <div className='main-content'>
                     <Button variant='subtle' color='gray' radius="sm" onClick={fetch_songs_on_click}>Fetch songs</Button>
                         {songs.map((name: string) => (
                             <div key={name} onClick={() => play_music(name)} style={{display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer'}}>
                                 {covers_map[name] && <img src={`data:image/jpeg;base64,${covers_map[name]}`} width={50} height={50} style={{borderRadius: '4px'}} />}
-                                <div>
+                                <div className='track'>
                                     <div>{metadata_map[name]?.[0] || name}</div>
-                                    <div style={{color: 'gray', fontSize: '12px'}}>{metadata_map[name]?.[1] || "Unknown"}</div>
+                                    <p>-</p>
+                                    <div style={{color: '', fontSize: '12px'}}>{metadata_map[name]?.[1] || "Unknown"}</div>
                                 </div>
                             </div>
                         ))}

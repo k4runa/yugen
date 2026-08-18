@@ -1,3 +1,4 @@
+#include <string_view>
 #define MINIAUDIO_IMPLEMENTATION
 
 #include "coco/stray/stray.hpp"
@@ -61,6 +62,16 @@ coco::stray start(saucer::application *app)
      webview->expose("get_cover", [&](const std::string& file_path) -> std::string {
           return yugen::get_cover(file_path);
      });
+
+     webview->expose("search", [&](const std::string& query,int count) -> std::vector<std::string> {
+          return yugen::search_youtube(query, count);
+     });
+
+     webview->expose("download", [&](const std::string& id, const std::string& output_path) -> std::string {
+          return yugen::download_youtube(id, output_path);
+     });
+
+
      
      webview->set_url("http://localhost:5173/");
      window->show();

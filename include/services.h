@@ -26,4 +26,7 @@ namespace yugen
 
      std::string get_cover(const std::string& file_path);
      std::string base64_encode(const unsigned char* data, size_t len);
+
+     std::vector<std::string> search_youtube(const std::string& query, int count);
+     std::string download_youtube(const std::string& id, const std::string& output_path);
 }

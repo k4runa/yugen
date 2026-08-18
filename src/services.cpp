@@ -134,4 +134,30 @@ namespace yugen
 
           return result;
      }
+
+     std::vector<std::string> search_youtube(const std::string& query, int count) 
+     {
+          std::string cmd = "yt-dlp \"ytsearch" + std::to_string(count) + ":" + query + "\" --print title --print id --print thumbnail --skip-download";
+          
+          FILE* pipe = popen(cmd.c_str(), "r");
+          if (!pipe) return {};
+          
+          std::vector<std::string> results;
+          char buffer[512];
+          while (fgets(buffer, sizeof(buffer), pipe)) 
+          {
+               std::string line(buffer);
+               if (!line.empty() && line.back() == '\n') line.pop_back();
+               results.push_back(line);
+          }
+          pclose(pipe);
+          return results;
+     }
+     std::string download_youtube(const std::string& id, const std::string& output_path) 
+     {
+          std::string cmd = "yt-dlp -x --audio-format mp3 --embed-thumbnail --embed-metadata -o \"" 
+               + output_path + "/%(title)s [%(id)s].%(ext)s\" \"https://youtube.com/watch?v=" + id + "\"";
+          std::system(cmd.c_str());
+          return "done";
+     }
 }

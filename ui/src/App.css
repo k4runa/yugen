@@ -31,3 +31,10 @@ body{
     border-top: 1px solid #2a2a2a;
     padding: 16px;
 }
+
+.track {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    align-items: center;
+}
