@@ -70,7 +70,7 @@ export default function App()
 
     async function toggle_loop() {
         // @ts-ignore
-        await window.saucer.exposed.loop();
+        await window.saucer.exposed.toggle_loop();
         set_looped(!looped);
     }
 
