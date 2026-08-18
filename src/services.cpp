@@ -1,10 +1,18 @@
 #include "services.h"
+#include <cstddef>
 #include <print>
 #include <string>
 #include <vector>
 #include <filesystem>
 
-#include "../include/miniaudio.h"
+#include "miniaudio.h"
+#include "taglib.h"
+#include "taglib/mpegfile.h"
+#include <taglib/id3v2tag.h>
+#include "taglib/fileref.h"
+#include "taglib/tag.h"
+#include <taglib/attachedpictureframe.h>
+#include "tfile.h"
 
 namespace fs = std::filesystem;
 
@@ -13,7 +21,7 @@ namespace yugen
      static ma_sound sound;
      static bool sound_initalized = false;
 
-     std::vector<std::string> fetch_covers(const std::string &file_path)
+     std::vector<std::string> fetch_songs(const std::string &file_path)
      {
           if(!fs::exists(file_path)) return {};
 
@@ -74,5 +82,56 @@ namespace yugen
                ma_bool32 cur = ma_sound_is_looping(&sound);
                ma_sound_set_looping(&sound, !cur);
           }
+     }
+
+     std::vector<std::string> get_metadata(const std::string &file_path)
+     {
+          TagLib::FileRef f(file_path.c_str());
+          if(!f.isNull() && f.tag())
+          {
+               std::vector<std::string> out_vec;
+               TagLib::Tag *tag = f.tag();
+               
+               out_vec.emplace_back(tag->title().toCString(true));
+               out_vec.emplace_back(tag->artist().toCString(true));
+               out_vec.emplace_back(tag->album().toCString(true));
+
+               return out_vec;
+          }
+
+          return {};
+     }
+
+     std::string get_cover(const std::string &file_path)
+     {
+          TagLib::MPEG::File f(file_path.c_str());
+          auto* tag = f.ID3v2Tag();
+          if(!tag) return "";
+
+          auto frames = tag->frameListMap()["APIC"];
+          if(frames.isEmpty()) return "";
+
+          auto* pic = static_cast<TagLib::ID3v2::AttachedPictureFrame*>(frames.front());
+          auto data = pic->picture();
+
+          return base64_encode(reinterpret_cast<const unsigned char*>(data.data()), data.size());
+     }
+
+     std::string base64_encode(const unsigned char *data, size_t len)
+     {
+          static const char* chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+          std::string result;
+
+          for(std::size_t i = 0; i < len; i += 3)
+          {
+               unsigned int b = (data[i] << 16) | (i + 1 < len ? data[i + 1] << 8 : 0) | (i + 2 < len ? data[i + 2] : 0);
+               result += chars[(b >> 18) & 0x3F];
+               result += chars[(b >> 12) & 0x3F];
+
+               result += (i + 1 < len) ? chars[(b >> 6) & 0x3F] : '=';
+               result += (i + 2 < len) ? chars[b & 0x3F] : '=';
+          }
+
+          return result;
      }
 }

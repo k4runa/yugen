@@ -4,7 +4,7 @@
 #include "saucer/app.hpp"
 #include "saucer/window.hpp"
 #include "services.h"
-#include "../include/miniaudio.h"
+#include "miniaudio.h"
 
 #include <saucer/smartview.hpp>
 #include <string>
@@ -26,8 +26,8 @@ coco::stray start(saucer::application *app)
      window->set_title("yugen");
      window->set_decorations(saucer::window::decoration::none);
 
-     webview->expose("fetch_covers", [&](const std::string& file_path) -> std::vector<std::string> {
-          const auto res = yugen::fetch_covers(file_path); 
+     webview->expose("fetch_songs", [&](const std::string& file_path) -> std::vector<std::string> {
+          const auto res = yugen::fetch_songs(file_path); 
           return res;
      });
      
@@ -53,6 +53,13 @@ coco::stray start(saucer::application *app)
 
      webview->expose("toggle_loop", [](){
           yugen::toggle_loop();
+     });
+     webview->expose("get_metadata", [&](const std::string& file_path) -> std::vector<std::string> {
+          return yugen::get_metadata(file_path);
+     });
+
+     webview->expose("get_cover", [&](const std::string& file_path) -> std::string {
+          return yugen::get_cover(file_path);
      });
      
      webview->set_url("http://localhost:5173/");

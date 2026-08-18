@@ -1,18 +1,24 @@
 import { useEffect, useState } from 'react'
 import { MantineProvider } from '@mantine/core';
-import { Stack, Slider, Button } from '@mantine/core';
+import { Slider, Button, Group } from '@mantine/core';
 
 import '@mantine/core/styles.css';
 import './App.css'
 
 export default function App() 
 {
-    const [covers, set_covers] = useState<string[]>([]);
+    const [songs, set_songs] = useState<string[]>([]);
     const file_path: string = "/home/g4lice/Musics/";
 
     const [length, set_length] = useState(0);
     const [position, set_position] = useState(0);
-
+    const [paused, set_paused] = useState<boolean>(false);
+    const [looped, set_looped] = useState<boolean>(false);
+    const [metadata_map, set_metadata_map] = useState<Record<string, string[]>>({});
+    const [covers_map, set_covers_map] = useState<Record<string, string>>({});
+    
+    const icon = paused ? "▶" : "◼"; 
+    const looped_icon = looped ? "👍️" : "👎️";
 
     useEffect(() => {
         const interval = setInterval(async () => {
@@ -24,12 +30,25 @@ export default function App()
         }, 1000);
 
         return () => clearInterval(interval);
-    });
+    }, []);
 
-    async function fetch_covers_on_click() {
+    async function fetch_songs_on_click() {
         // @ts-ignore
-        const res_vec = await window.saucer.exposed.fetch_covers(file_path);
-        set_covers(res_vec);
+        const res_vec = await window.saucer.exposed.fetch_songs(file_path);
+        set_songs(res_vec);
+
+        const metadata_map: Record<string, string[]> = {};
+        const covers_map: Record<string, string> = {};
+        
+        for(const name of res_vec) {
+            // @ts-ignore
+            metadata_map[name] = await window.saucer.exposed.get_metadata(file_path  + name);
+            // @ts-ignore
+            covers_map[name] = await window.saucer.exposed.get_cover(file_path  + name);
+        }
+
+        set_metadata_map(metadata_map);
+        set_covers_map(covers_map);
     }
 
     async function play_music(cover_name: string) {
@@ -49,37 +68,52 @@ export default function App()
         return res;
     }
 
-    async function stop() {
-        // @ts-ignore
-        await window.saucer.exposed.stop();     
-    }
-
-    async function resume()  {
-        // @ts-ignore
-        await window.saucer.exposed.resume();     
-    }
-
     async function toggle_loop() {
         // @ts-ignore
-        await window.saucer.exposed.loop();     
+        await window.saucer.exposed.loop();
+        set_looped(!looped);
+    }
+
+    async function toggle_pause() {
+        if (paused) {
+            // @ts-ignore
+            await window.saucer.exposed.resume();
+        } else {
+            // @ts-ignore
+            await window.saucer.exposed.stop();
+        }
+        set_paused(!paused);
     }
 
     return (
         <MantineProvider defaultColorScheme='dark'>
-            <Stack gap="md" p="md">
-                <Button variant='subtle' color='gray' radius="sm" onClick={fetch_covers_on_click}>Fetch covers</Button>
-                {covers.map((name: string) => (
-                    <Button key={name} onClick={() => play_music(name)} variant='subtle' color='gray' radius="sm">{name}</Button>
-                ))}
+            <div className='app-container'>
+                <div className='sidebar'>
+                    {
+                        
+                    }
+                </div>
+                <div className='main-content'>
+                    <Button variant='subtle' color='gray' radius="sm" onClick={fetch_songs_on_click}>Fetch songs</Button>
+                        {songs.map((name: string) => (
+                            <div key={name} onClick={() => play_music(name)} style={{display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer'}}>
+                                {covers_map[name] && <img src={`data:image/jpeg;base64,${covers_map[name]}`} width={50} height={50} style={{borderRadius: '4px'}} />}
+                                <div>
+                                    <div>{metadata_map[name]?.[0] || name}</div>
+                                    <div style={{color: 'gray', fontSize: '12px'}}>{metadata_map[name]?.[1] || "Unknown"}</div>
+                                </div>
+                            </div>
+                        ))}
+                </div>
+                <div className='player-bar'>
+                    <Slider value={position} min={0} max={length}/>
 
-                <Slider value={position} min={0} max={length}/>
-                
-                <Stack gap="sm" p="sm" align='center'>
-                    <Button radius="sm" w={200} onClick={stop}>Stop</Button>
-                    <Button radius="sm" w={200} onClick={resume}>Resume</Button>
-                    <Button radius="sm" w={200} onClick={toggle_loop}>Loop</Button>
-                </Stack>
-            </Stack>
+                    <Group gap="sm" p="sm" align='center' justify='center'>
+                        <Button radius="sm" w={200} onClick={toggle_pause}>{icon}</Button>
+                        <Button radius="sm" w={200} onClick={toggle_loop}>Loop: {looped_icon}</Button>
+                    </Group>
+                </div>
+            </div>
         </MantineProvider>
     );
 }
