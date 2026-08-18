@@ -30,6 +30,10 @@ type Bridge = {
     is_finished(): Promise<boolean>
     seek(position: number): Promise<void>
     delete_song(path: string): Promise<void>
+    window_close(): Promise<void>
+    window_minimize(): Promise<void>
+    window_zoom(): Promise<void>
+    window_drag(): Promise<void>
     get_liked_songs(): Promise<string[]>
     like_song(name: string): Promise<void>
     unlike_song(name: string): Promise<void>
@@ -145,6 +149,11 @@ export default function App() {
     const [shuffled, set_shuffled] = useState<{ key: string; order: string[] } | null>(null)
 
     const [menu, set_menu] = useState<{ x: number; y: number; song: string } | null>(null)
+
+    // column widths are kept in rem so they grow with the root font size
+    const [sidebar_w, set_sidebar_w] = useState(13)
+    const [rail_w, set_rail_w] = useState(16.75)
+    const resizing = useRef<{ edge: 'sidebar' | 'rail'; from: number; width: number } | null>(null)
 
     const [query, set_query] = useState('')
     const [searching, set_searching] = useState(false)
@@ -448,6 +457,33 @@ export default function App() {
         { id: 'artists', label: 'Artists', icon: ICONS.artist, count: artists.size },
     ]
 
+    const root_rem = () => parseFloat(getComputedStyle(document.documentElement).fontSize)
+
+    const start_resize = (edge: 'sidebar' | 'rail') => (e: React.PointerEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        e.currentTarget.classList.add('active')
+
+        resizing.current = { edge, from: e.clientX, width: edge === 'sidebar' ? sidebar_w : rail_w }
+    }
+
+    function move_resize(e: React.PointerEvent<HTMLDivElement>) {
+        const drag = resizing.current
+        if (!drag) return
+
+        // the rail grows leftwards, so its delta is inverted
+        const delta = (e.clientX - drag.from) / root_rem()
+        const next = drag.width + (drag.edge === 'sidebar' ? delta : -delta)
+
+        if (drag.edge === 'sidebar') set_sidebar_w(Math.min(Math.max(next, 9), 22))
+        else set_rail_w(Math.min(Math.max(next, 10), 26))
+    }
+
+    function end_resize(e: React.PointerEvent<HTMLDivElement>) {
+        e.currentTarget.classList.remove('active')
+        resizing.current = null
+    }
+
     // right-click target: the native webkit menu is off, this one replaces it
     const context = (name: string) => (e: React.MouseEvent) => {
         e.preventDefault()
@@ -521,7 +557,10 @@ export default function App() {
 
     return (
         <div className='shell' onContextMenu={(e) => e.preventDefault()}>
-            <div className='frame glass'>
+            <div
+                className='frame'
+                style={{ gridTemplateColumns: `${sidebar_w}rem 1fr ${rail_w}rem` }}
+            >
                 <aside className='sidebar'>
                     <div className='brand'>
                         <span className='brand-mark'>
@@ -554,8 +593,12 @@ export default function App() {
                 </aside>
 
                 <main className='main'>
-                    <div className='topbar'>
-                        <label className='search'>
+                    <div
+                        className='topbar'
+                        onPointerDown={() => bridge().window_drag()}
+                        onDoubleClick={() => bridge().window_zoom()}
+                    >
+                        <label className='search' onPointerDown={(e) => e.stopPropagation()}>
                             <Icon d={ICONS.search} size={15} />
                             <input
                                 placeholder='Search on youtube...'
@@ -567,6 +610,7 @@ export default function App() {
 
                         <button
                             className='icon-btn'
+                            onPointerDown={(e) => e.stopPropagation()}
                             title={`Theme: ${theme}`}
                             onClick={() =>
                                 set_theme(theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system')
@@ -720,10 +764,27 @@ export default function App() {
                         </section>
                     )}
                 </aside>
+
+                <div
+                    className='resizer'
+                    style={{ left: `${sidebar_w}rem` }}
+                    onPointerDown={start_resize('sidebar')}
+                    onPointerMove={move_resize}
+                    onPointerUp={end_resize}
+                    onPointerCancel={end_resize}
+                />
+                <div
+                    className='resizer'
+                    style={{ left: `calc(100% - ${rail_w}rem)` }}
+                    onPointerDown={start_resize('rail')}
+                    onPointerMove={move_resize}
+                    onPointerUp={end_resize}
+                    onPointerCancel={end_resize}
+                />
             </div>
 
             {menu && (
-                <div className='context-menu glass' style={{ left: menu.x, top: menu.y }}>
+                <div className='context-menu' style={{ left: menu.x, top: menu.y }}>
                     <div className='context-head ellipsis'>{title_of(menu.song)}</div>
                     <button onClick={() => play_music(menu.song)}>
                         <Icon d={ICONS.play} size={15} fill />
@@ -740,7 +801,7 @@ export default function App() {
                 </div>
             )}
 
-            <div className='player glass'>
+            <div className='player'>
                 <div
                     className={`progress${seeking !== null ? ' dragging' : ''}`}
                     onPointerDown={start_seek}

@@ -172,7 +172,26 @@ coco::stray start(saucer::application *app)
      });
      
      
+     // decorations are off, so the window controls have to come from the ui
+     webview->expose("window_close", [&]() {
+          window->close();
+     });
+
+     webview->expose("window_minimize", [&]() {
+          window->set_minimized(true);
+     });
+
+     webview->expose("window_zoom", [&]() {
+          window->set_maximized(!window->maximized());
+     });
+
+     webview->expose("window_drag", [&]() {
+          window->start_drag();
+     });
+
      webview->set_url("http://localhost:5173/");
+     window->set_maximized(true);
+     window->set_min_size({1370, 915});
      window->show();
 
      co_await app->finish();
