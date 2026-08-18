@@ -347,9 +347,31 @@ namespace yugen
      std::vector<std::string> Core::search_youtube(const std::string& query, int count) 
      {
           std::string cmd = "yt-dlp \"ytsearch" + std::to_string(count) 
-               + ":" + query + "\" --flat-playlist --no-warnings --skip-download --print title --print id";
+               + ":" + query + 
+                    "\" --flat-playlist --no-warnings --skip-download --print title --print id";
           
-               FILE* pipe = popen(cmd.c_str(), "r");
+          FILE* pipe = popen(cmd.c_str(), "r");
+          if (!pipe) return {};
+          
+          std::vector<std::string> results;
+          char buffer[512];
+          while (fgets(buffer, sizeof(buffer), pipe)) 
+          {
+               std::string line(buffer);
+               if (!line.empty() && line.back() == '\n') line.pop_back();
+               results.push_back(line);
+          }
+          pclose(pipe);
+          return results;
+     }
+
+     std::vector<std::string> Core::search_sound_cloud(const std::string& query, int count) 
+     {
+          std::string cmd = "yt-dlp \"scsearch" + std::to_string(count) + 
+               ":" + query + 
+                    "\" --flat-playlist --no-warnings --skip-download --print title --print webpage_url --print \"%(thumbnails.0.url)s\"";
+          
+          FILE* pipe = popen(cmd.c_str(), "r");
           if (!pipe) return {};
           
           std::vector<std::string> results;
@@ -401,6 +423,14 @@ namespace yugen
      {
           std::string cmd = "yt-dlp -x --audio-format mp3 --embed-thumbnail --embed-metadata -o \"" 
                + output_path + "/%(title)s [%(id)s].%(ext)s\" \"https://youtube.com/watch?v=" + id + "\"";
+          std::system(cmd.c_str());
+          return "done";
+     }
+
+     std::string Core::download_from_sc(const std::string& url, const std::string& output_path) 
+     {
+          std::string cmd = "yt-dlp -x --audio-format mp3 --embed-thumbnail --embed-metadata -o \"" 
+               + output_path + "/%(title)s [%(id)s].%(ext)s\" \"" + url + "\"";
           std::system(cmd.c_str());
           return "done";
      }

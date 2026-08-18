@@ -84,8 +84,8 @@ coco::stray start(saucer::application *app)
           return co::get_cover(file_path);
      });
 
-     webview->expose("search", [&](std::string query, int count, saucer::executor<std::vector<std::string>> exec) {
-          std::println("[INFO] Searching query: {}", query);
+     webview->expose("search_yt", [&](std::string query, int count, saucer::executor<std::vector<std::string>> exec) {
+          std::println("[INFO] Searching on youtube - query: {}", query);
           std::thread t{[query, count, exec = std::move(exec)]() {
                auto results = co::search_youtube(query, count);
                exec.resolve(results);
@@ -93,8 +93,17 @@ coco::stray start(saucer::application *app)
           t.detach();
      });
 
-     webview->expose("download", [&](std::string id,  std::string output_path, saucer::executor<std::string> exec) {
-          std::println("[INFO] Download: {}", id);
+     webview->expose("search_sc", [&](std::string query, int count, saucer::executor<std::vector<std::string>> exec) {
+          std::println("[INFO] Searching on sound cloud - query: {}", query);
+          std::thread t{[query, count, exec = std::move(exec)]() {
+               auto results = co::search_sound_cloud(query, count);
+               exec.resolve(results);
+          }};
+          t.detach();
+     });
+
+     webview->expose("download_yt", [&](std::string id,  std::string output_path, saucer::executor<std::string> exec) {
+          std::println("[INFO] Download from youtube - id: {}", id);
           std::thread t{[id, output_path, exec = std::move(exec)]() {
                auto results = co::download_from_yt(id, output_path);
                exec.resolve(results);
@@ -102,8 +111,17 @@ coco::stray start(saucer::application *app)
           t.detach();
      });
 
+     webview->expose("download_sc", [&](std::string url,  std::string output_path, saucer::executor<std::string> exec) {
+          std::println("[INFO] Download from sound cloud - url: {}", url);
+          std::thread t{[url, output_path, exec = std::move(exec)]() {
+               auto results = co::download_from_sc(url, output_path);
+               exec.resolve(results);
+          }};
+          t.detach();
+     });
+
      webview->expose("get_liked_songs", [&](saucer::executor<std::vector<std::string>> exec) {
-          std::println("[INFO] Fetching liked songs:");
+          std::println("[INFO] Fetched liked songs");
           std::thread t{[exec = std::move(exec)]() {
                auto results = mm::get_liked_songs();
                exec.resolve(results);

@@ -24,10 +24,11 @@ namespace yugen
      {
           public:
                static std::string download_from_yt(const std::string& id, const std::string& output_path);
+               static std::string download_from_sc(const std::string& url, const std::string& output_path);
+               static std::vector<std::string> search_sound_cloud(const std::string& query, int count);
+               static std::vector<std::string> search_youtube(const std::string& query, int count);
                static std::string base64_encode(const unsigned char* data, size_t len);
                static std::string get_cover(const std::string& file_path);
-
-               static std::vector<std::string> search_youtube(const std::string& query, int count);
 
           private:
                //Nothing here
@@ -42,14 +43,14 @@ namespace yugen
                static std::string prev_song();
 
                static void play(ma_engine *engine, const std::string& file_path);
+               static void delete_song(const std::string& file_path);
+               static void seek(float position); 
+               static bool is_finished();
+               static void toggle_loop();
                static float get_pos();
                static float get_len();
-               static void stop();
                static void resume();
-               static void toggle_loop();
-               static void seek(float position); 
-               static void delete_song(const std::string& file_path);
-               static bool is_finished();
+               static void stop();
 
           private:
                //Nothing here
