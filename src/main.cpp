@@ -19,6 +19,9 @@
 
 
 namespace fs = std::filesystem;
+using mm = yugen::MusicManager;
+using sm = yugen::SoundManager;
+using co = yugen::Core;
 
 coco::stray start(saucer::application *app)
 {
@@ -36,55 +39,55 @@ coco::stray start(saucer::application *app)
 
 
      window->set_title("yugen");
-     window->set_decorations(saucer::window::decoration::none);
 
      // the webkit menu can't be edited, so it is turned off and drawn in the ui instead
      webview->set_context_menu(false);
 
      webview->expose("fetch_songs", [&](const std::string& file_path) -> std::vector<std::string> {
           std::println("[INFO] Fetching songs on {}", file_path);
-          const auto res = yugen::fetch_songs(file_path); 
+          const auto res = sm::fetch_songs(file_path); 
           return res;
      });
      
      webview->expose("play_music", [&](const std::string& file_path) {
-          yugen::play(&engine, file_path);
+          sm::play(&engine, file_path);
      });
 
      webview->expose("get_position", []() -> float {
-          return yugen::get_pos();
+          return sm::get_pos();
      });
 
      webview->expose("get_length", []() -> float {
-          return yugen::get_len();
+          return sm::get_len();
      });
      
      webview->expose("stop", []() {
-          yugen::stop();
+          sm::stop();
      });
 
      webview->expose("resume", []() {
-          yugen::resume();
+          sm::resume();
      });
 
      webview->expose("toggle_loop", [](bool state){
           std::println("[INFO]: Toggle loop: {}", state);
-          yugen::toggle_loop();
+          sm::toggle_loop();
      });
+
      webview->expose("get_metadata", [&](const std::string& file_path) -> std::vector<std::string> {
           std::println("[INFO] Get metadata: {}", file_path);
-          return yugen::get_metadata(file_path);
+          return sm::get_metadata(file_path);
      });
 
      webview->expose("get_cover", [&](const std::string& file_path) -> std::string {
           std::println("[INFO] Get cover: {}", file_path);
-          return yugen::get_cover(file_path);
+          return co::get_cover(file_path);
      });
 
      webview->expose("search", [&](std::string query, int count, saucer::executor<std::vector<std::string>> exec) {
           std::println("[INFO] Searching query: {}", query);
           std::thread t{[query, count, exec = std::move(exec)]() {
-               auto results = yugen::search_youtube(query, count);
+               auto results = co::search_youtube(query, count);
                exec.resolve(results);
           }};
           t.detach();
@@ -93,7 +96,7 @@ coco::stray start(saucer::application *app)
      webview->expose("download", [&](std::string id,  std::string output_path, saucer::executor<std::string> exec) {
           std::println("[INFO] Download: {}", id);
           std::thread t{[id, output_path, exec = std::move(exec)]() {
-               auto results = yugen::download_youtube(id, output_path);
+               auto results = co::download_from_yt(id, output_path);
                exec.resolve(results);
           }};
           t.detach();
@@ -102,7 +105,7 @@ coco::stray start(saucer::application *app)
      webview->expose("get_liked_songs", [&](saucer::executor<std::vector<std::string>> exec) {
           std::println("[INFO] Fetching liked songs:");
           std::thread t{[exec = std::move(exec)]() {
-               auto results = yugen::get_liked_songs();
+               auto results = mm::get_liked_songs();
                exec.resolve(results);
           }};
           t.detach();
@@ -111,7 +114,7 @@ coco::stray start(saucer::application *app)
      webview->expose("like_song", [&](std::string song_name, saucer::executor<void> exec) {
           std::println("[INFO] Liked song: {}", song_name);
           std::thread t{[song_name, exec = std::move(exec)]() {
-               yugen::like_song(song_name);
+               mm::like_song(song_name);
                exec.resolve();
           }};
           t.detach();
@@ -120,16 +123,16 @@ coco::stray start(saucer::application *app)
      webview->expose("unlike_song", [&](std::string song_name, saucer::executor<void> exec) {
           std::println("[INFO] Unliked song: {}", song_name);
           std::thread t{[song_name, exec = std::move(exec)]() {
-               yugen::unlike_song(song_name);
+               mm::unlike_song(song_name);
                exec.resolve();
           }};
           t.detach();
      });
 
      webview->expose("shuffle", [&](std::vector<std::string> songs, saucer::executor< std::vector<std::string>> exec) {
-          std::println("[INFO] Shuffle songs"); 
+          std::println("[INFO] Shuffled songs"); 
           std::thread t{[songs, exec = std::move(exec)]() {
-               auto res = yugen::shuffle_songs(songs);
+               auto res = mm::shuffle_songs(songs);
                exec.resolve(res);
           }};
           t.detach();
@@ -137,27 +140,28 @@ coco::stray start(saucer::application *app)
      
      webview->expose("next", [&](saucer::executor<std::string> exec) {
           std::thread t{[exec = std::move(exec)]() {
-               auto res = yugen::next_song();
+               auto res = sm::next_song();
                exec.resolve(res);
           }};
           t.detach();
      });
 
      webview->expose("is_finished", []() -> bool {
-          return yugen::is_finished();
+          return sm::is_finished();
      });
 
      webview->expose("prev", [&](saucer::executor<std::string> exec) {
           std::thread t{[exec = std::move(exec)]() {
-               auto res = yugen::prev_song();
+               auto res = sm::prev_song();
                exec.resolve(res);
           }};
           t.detach();
      });
 
      webview->expose("delete_song", [&](std::string file_path, saucer::executor<void> exec) {
+          std::println("[INFO] Deleted song: {}", file_path);
           std::thread t{[file_path, exec = std::move(exec)]() {
-               yugen::delete_song(file_path);
+               sm::delete_song(file_path);
                exec.resolve();
           }};
           t.detach();
@@ -165,33 +169,76 @@ coco::stray start(saucer::application *app)
 
      webview->expose("seek", [&](float position, saucer::executor<void> exec) {
           std::thread t{[position, exec = std::move(exec)]() {
-               yugen::seek(position);
+               sm::seek(position);
                exec.resolve();
           }};
           t.detach();
      });
+
+     webview->expose("add_to_playlist", [&](std::string playlist_name, std::string file_path, saucer::executor<bool> exec) {
+          std::println("[INFO] Add {} to {}", file_path, playlist_name);
+          std::thread t{[playlist_name, file_path, exec = std::move(exec)]() {
+               auto res = mm::add_to_playlist(playlist_name, file_path);
+               exec.resolve(res);
+          }};
+          t.detach();
+     });
+
+     webview->expose("remove_from_playlist", [&](std::string playlist_name, std::string file_path, saucer::executor<bool> exec) {
+          std::println("[INFO] Delete {} from {}", file_path, playlist_name);
+          std::thread t{[playlist_name, file_path, exec = std::move(exec)]() {
+               auto res = mm::remove_from_playlist(playlist_name, file_path);
+               exec.resolve(res);
+          }};
+          t.detach();
+     });
+
+     // the sidebar needs the names, and opening one needs its tracks
+     webview->expose("get_playlists", [&](saucer::executor<std::vector<std::string>> exec) {
+          std::thread t{[exec = std::move(exec)]() {
+               exec.resolve(mm::get_playlists());
+          }};
+          t.detach();
+     });
+
+     webview->expose("get_playlist", [&](std::string playlist_name, saucer::executor<std::vector<std::string>> exec) {
+          std::thread t{[playlist_name, exec = std::move(exec)]() {
+               exec.resolve(mm::get_playlist(playlist_name));
+          }};
+          t.detach();
+     });
+
+     webview->expose("create_playlist", [&](std::string playlist_name, saucer::executor<bool> exec) {
+          std::println("[INFO] Create playist: {}", playlist_name);
+          std::thread t{[playlist_name, exec = std::move(exec)]() {
+               auto res = mm::create_playlist(playlist_name);
+               exec.resolve(res);
+          }};
+          t.detach();
+     });
      
-     
-     // decorations are off, so the window controls have to come from the ui
-     webview->expose("window_close", [&]() {
-          window->close();
+     webview->expose("delete_playlist", [&](std::string playlist_name, saucer::executor<bool> exec) {
+          std::println("[INFO] Delete playist: {}", playlist_name);
+          std::thread t{[playlist_name, exec = std::move(exec)]() {
+               auto res = mm::delete_playlist(playlist_name);
+               exec.resolve(res);
+          }};
+          t.detach();
      });
 
-     webview->expose("window_minimize", [&]() {
-          window->set_minimized(true);
-     });
-
-     webview->expose("window_zoom", [&]() {
-          window->set_maximized(!window->maximized());
-     });
-
-     webview->expose("window_drag", [&]() {
-          window->start_drag();
+     webview->expose("rename_playlist", [&](std::string playlist_name, std::string new_playlist_name ,saucer::executor<bool> exec) {
+          std::println("[INFO] Delete playist: {}", playlist_name);
+          std::thread t{[playlist_name, new_playlist_name, exec = std::move(exec)]() {
+               auto res = mm::rename_playlist(playlist_name, new_playlist_name);
+               exec.resolve(res);
+          }};
+          t.detach();
      });
 
      webview->set_url("http://localhost:5173/");
+     window->set_min_size({1200, 920});
      window->set_maximized(true);
-     window->set_min_size({1370, 915});
+     window->set_decorations(saucer::window::decoration::none);
      window->show();
 
      co_await app->finish();
