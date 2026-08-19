@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -11,8 +12,10 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <print>
 #include <random>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,7 +26,7 @@
 
 // third party
 #include <curl/curl.h>
-#include <discordpp.h>
+#include <discord-rpc.hpp>
 #include <nlohmann/json.hpp>
 #include <taglib/attachedpictureframe.h>
 #include <taglib/audioproperties.h>
@@ -46,11 +49,32 @@ namespace yugen
      {
           constexpr const char* PLAYLISTS_FILE = "/playlists.json";
           constexpr const char* LIKED_SONGS_FILE = "/liked_songs.json";
+          constexpr const char* COVERS_FILE = "/covers.json";
 
-          // how long the presence thread sleeps between callback pumps; the
-          // discord sdk needs RunCallbacks called regularly, and a track
-          // change wakes the thread early through the condition variable
-          constexpr auto DISCORD_POLL_INTERVAL = std::chrono::milliseconds(100);
+          // what is shown when no cover is known: an asset uploaded to the
+          // application on discord's developer portal, named by its key
+          constexpr const char* DISCORD_LOGO_ASSET = "yugen";
+
+          // the last track handed to publish_activity(), kept so that turning
+          // sharing back on can put it up again right away
+          std::mutex discord_mtx;
+          TrackInfo discord_track;
+          bool discord_running = false;
+
+          // set from the ui through set_activity(), read whenever a status is
+          // about to go up - atomic because those are two different threads
+          std::atomic<bool> share_activity_on_dc = true;
+
+          // file name -> cover url, mirrored to covers.json. a miss is stored as
+          // an empty string, so a track without artwork is looked up once and
+          // never asked about again
+          std::mutex cover_mtx;
+          json cover_cache;
+          bool cover_cache_loaded = false;
+
+          // lookups already in flight, so two publishes of the same track do not
+          // both go out to the network
+          std::set<std::string> cover_inflight;
 
           // one voice at a time: starting a track tears the previous one down
           ma_sound sound;
@@ -243,6 +267,43 @@ namespace yugen
      // Reads the embedded cover out of the mp3's ID3v2 APIC frame and returns it
      // base64 encoded, so the ui can drop it into an <img> src without a file on
      // disk to serve. Empty string when the file carries no artwork.
+     // Discord cannot read the cover embedded in the file, only fetch a url, so
+     // the artwork has to be found somewhere public. The itunes search endpoint
+     // needs no key and answers with a 100x100 url, which resizes by rewriting
+     // the size in the path.
+     std::string Core::lookup_cover_url(const std::string& title, const std::string& artist)
+     {
+          if(title.empty()) return "";
+
+          CURL* curl = curl_easy_init();
+          if(!curl) return "";
+
+          const std::string term = artist.empty() ? title : artist + " " + title;
+          char* enc_term = curl_easy_escape(curl, term.c_str(), 0);
+
+          std::string url = "https://itunes.apple.com/search?entity=song&limit=1&term=";
+          if(enc_term) url += enc_term;
+
+          curl_free(enc_term);
+          curl_easy_cleanup(curl);
+
+          const std::string response = fetch_url(url);
+          if(response.empty()) return "";
+
+          const auto data = json::parse(response, nullptr, false);
+          if(data.is_discarded() || !data.contains("results") || data["results"].empty()) return "";
+
+          const auto& hit = data["results"][0];
+          if(!hit.contains("artworkUrl100") || !hit["artworkUrl100"].is_string()) return "";
+
+          std::string artwork = hit["artworkUrl100"].get<std::string>();
+
+          const auto size = artwork.find("100x100");
+          if(size != std::string::npos) artwork.replace(size, 7, "512x512");
+
+          return artwork;
+     }
+
      std::string Core::get_cover(const std::string& file_path)
      {
           TagLib::MPEG::File f(file_path.c_str());
@@ -311,18 +372,27 @@ namespace yugen
 
           std::println("[INFO] Playing: {}", file_path);
 
-          // the track is recorded even when sharing is off, so that switching it
-          // back on can publish whatever is playing at that moment instead of
-          // waiting for the next track; whether it reaches discord is the
-          // presence thread's call
-          {
-               std::lock_guard<std::mutex> lk(g_discord_state.mtx);
+          TrackInfo track {.title = title, .artist = artist, .album = album, .file_path = file_path};
 
-               g_discord_state.current_track = {.title = title, .artist = artist, .album = album};
-               g_discord_state.dirty = true;
+          // the caller normally passes the tags it already has, but not every
+          // call site does, and the ui may not have read them yet - so an empty
+          // title means going to the file for them rather than showing nothing
+          if(track.title.empty())
+          {
+               const auto meta = get_metadata(file_path);
+               if(meta.size() >= 3)
+               {
+                    track = {.title = meta[0], .artist = meta[1], .album = meta[2], .file_path = file_path};
+               }
           }
 
-          g_discord_state.cv.notify_one();
+          // untagged file: the name on disk is still better than a blank status
+          if(track.title.empty()) track.title = fs::path(file_path).filename().string();
+
+          // handed over even when sharing is off: publish_activity() records it
+          // either way, so switching sharing back on can put up whatever is
+          // playing at that moment instead of waiting for the next track
+          publish_activity(track);
      }
 
      void SoundManager::resume()
@@ -665,109 +735,216 @@ namespace yugen
      /*
       * Discord rich presence.
       */
-     // Connects to the local discord client and leaves a thread behind that waits
-     // for track changes and keeps the sdk's callbacks pumped. Everything from
-     // here on runs on that thread until stop_discord() joins it.
+     // Opens the rpc connection. The library starts a worker thread that keeps
+     // trying until the discord client answers and reconnects on its own if it
+     // is closed and reopened later, so this returns immediately and never fails
+     // in a way yugen has to handle - with no discord running, nothing happens.
      void start_discord(std::uint64_t app_id)
      {
-          g_discord_state.running = true;
+          auto& rpc = discord::RPCManager::get();
 
-          g_discord_thread = std::thread([app_id]()
+          rpc.setClientID(std::to_string(app_id))
+             .onReady([](const discord::User& user)
+             {
+                  std::println("[Discord] Connected as {}", user.username);
+             })
+             .onDisconnected([](int code, std::string_view message)
+             {
+                  std::println("[Discord] Disconnected ({}): {}", code, message);
+             })
+             .onErrored([](int code, std::string_view message)
+             {
+                  std::println("[Discord] Error ({}): {}", code, message);
+             });
+
+          rpc.initialize();
+
           {
-               auto client = std::make_shared<discordpp::Client>();
-
-               client->AddLogCallback([](std::string msg, discordpp::LoggingSeverity)
-               {
-                    std::println("[Discord] {}", msg);
-               }, discordpp::LoggingSeverity::Warning);
-
-               client->SetStatusChangedCallback([](discordpp::Client::Status status,
-                    discordpp::Client::Error, std::uint32_t)
-               {
-                    std::println("[Discord] Status: {}", discordpp::Client::StatusToString(status));
-               });
-
-               client->Connect();
-
-               while(g_discord_state.running.load())
-               {
-                    bool has_new_track = false;
-                    TrackInfo track;
-
-                    {
-                         std::unique_lock<std::mutex> lk(g_discord_state.mtx);
-
-                         // sleeping on the track change instead of spinning keeps
-                         // this thread off the cpu, and the timeout is what still
-                         // pumps the sdk callbacks while nothing is happening
-                         g_discord_state.cv.wait_for(lk, DISCORD_POLL_INTERVAL, []
-                         {
-                              return g_discord_state.dirty || !g_discord_state.running.load();
-                         });
-
-                         if(g_discord_state.dirty)
-                         {
-                              track = g_discord_state.current_track;
-                              g_discord_state.dirty = false;
-                              has_new_track = true;
-                         }
-                    }
-
-                    if(has_new_track)
-                    {
-                         // the flag is read here rather than at the call site, so
-                         // flipping the switch is enough to clear a presence that
-                         // is already up or to publish the running track
-                         if(share_activity_on_dc && SoundManager::is_playing())
-                         {
-                              discordpp::Activity act;
-
-                              act.SetType(discordpp::ActivityTypes::Listening);
-                              act.SetDetails(track.title);
-                              act.SetState(track.artist);
-
-                              client->UpdateRichPresence(act, [](discordpp::ClientResult res)
-                              {
-                                   if(!res.Successful()) std::println("[Discord] Activity update failed");
-                              });
-                         }
-                         else
-                         {
-                              client->ClearRichPresence();
-                         }
-                    }
-
-                    // the sdk hands its results back from here, so it has to run
-                    // on every pass and not once after the loop is over
-                    discordpp::RunCallbacks();
-               }
-
-               client->Disconnect();
-               discordpp::RunCallbacks();
-          });
+               std::lock_guard<std::mutex> lk(discord_mtx);
+               discord_running = true;
+          }
      }
 
+     // Clears the status before closing, otherwise the last track would sit on
+     // the profile until the discord client itself notices yugen is gone.
      void stop_discord()
      {
-          g_discord_state.running = false;
-          g_discord_state.cv.notify_all();
+          {
+               std::lock_guard<std::mutex> lk(discord_mtx);
+               discord_running = false;
+          }
 
-          if(g_discord_thread.joinable()) g_discord_thread.join();
+          discord::RPCManager::get().shutdown();
      }
 
-     // Takes effect immediately: the flag is flipped and the presence thread is
-     // woken with the current track marked as new, so turning it off clears the
-     // activity that is showing and turning it on publishes what is playing.
+     // The cover cache lives next to the playlists and is read once per run.
+     // Callers must hold cover_mtx.
+     static void load_cover_cache()
+     {
+          if(cover_cache_loaded) return;
+
+          cover_cache_loaded = true;
+          cover_cache = json::object();
+
+          const std::string path = data_dir() + COVERS_FILE;
+          if(!fs::exists(path)) return;
+
+          std::ifstream f(path);
+          if(!f.is_open()) return;
+
+          const auto data = json::parse(f, nullptr, false);
+          if(!data.is_discarded() && data.is_object()) cover_cache = data;
+     }
+
+     // A url already known for this track, if any. The outer optional says whether
+     // the track has been looked up at all, the string whether anything was found.
+     static std::optional<std::string> cached_cover(const std::string& key)
+     {
+          std::lock_guard<std::mutex> lk(cover_mtx);
+
+          load_cover_cache();
+
+          if(!cover_cache.contains(key)) return std::nullopt;
+
+          return cover_cache.at(key).get<std::string>();
+     }
+
+     static void store_cover(const std::string& key, const std::string& url)
+     {
+          std::lock_guard<std::mutex> lk(cover_mtx);
+
+          load_cover_cache();
+          cover_cache[key] = url;
+          cover_inflight.erase(key);
+
+          std::ofstream out(data_dir() + COVERS_FILE);
+          if(out.is_open()) out << cover_cache.dump(4);
+     }
+
+     // Tracks downloaded from youtube carry their video id in the file name, put
+     // there by the -o template, and youtube serves a thumbnail under that id. So
+     // for those the cover costs nothing: no request, no cache entry.
+     static std::string youtube_cover(const std::string& file_name)
+     {
+          const auto close = file_name.rfind(']');
+          if(close == std::string::npos) return "";
+
+          const auto open = file_name.rfind('[', close);
+          if(open == std::string::npos) return "";
+
+          const std::string id = file_name.substr(open + 1, close - open - 1);
+
+          // youtube ids are eleven characters of url-safe base64; a soundcloud id
+          // is a plain number, which is what keeps the two apart here
+          if(id.size() != 11) return "";
+
+          for(char c : id)
+          {
+               if(!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') return "";
+          }
+
+          return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg";
+     }
+
+     // Asks itunes on a worker thread and republishes the status once the answer
+     // is in, so the track goes up immediately and the artwork catches up. A track
+     // that has moved on in the meantime is left alone.
+     static void request_cover_async(const TrackInfo& track, const std::string& key)
+     {
+          {
+               std::lock_guard<std::mutex> lk(cover_mtx);
+               if(!cover_inflight.insert(key).second) return;
+          }
+
+          std::thread worker{[track, key]()
+          {
+               const std::string url = Core::lookup_cover_url(track.title, track.artist);
+               store_cover(key, url);
+
+               if(url.empty()) return;
+
+               publish_activity(track);
+          }};
+
+          worker.detach();
+     }
+
+     // Builds the status and queues it; the library's worker thread does the
+     // writing, so this returns without touching the socket.
+     //
+     // The track is remembered whatever the sharing flag says, because that is
+     // what set_activity() puts up when it is switched back on. An empty title
+     // means there is nothing to show - the status comes down instead.
+     void publish_activity(const TrackInfo& track)
+     {
+          std::lock_guard<std::mutex> lk(discord_mtx);
+
+          discord_track = track;
+
+          if(!discord_running) return;
+
+          auto& rpc = discord::RPCManager::get();
+
+          if(!share_activity_on_dc || track.title.empty())
+          {
+               rpc.clearPresence();
+               return;
+          }
+
+          // where the track sits right now, turned into the wall clock window it
+          // occupies, which is what discord draws the progress bar from
+          const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch()).count();
+
+          const std::int64_t started = now - static_cast<std::int64_t>(SoundManager::get_pos());
+          const std::int64_t ends = started + static_cast<std::int64_t>(SoundManager::get_len());
+
+          // the cover, if one is known by now; the logo stands in until then and
+          // whenever the track turns out to have no artwork anywhere
+          const std::string key = fs::path(track.file_path).filename().string();
+
+          std::string image = youtube_cover(key);
+
+          if(image.empty())
+          {
+               const auto known = cached_cover(key);
+
+               if(known) image = *known;
+               else if(!key.empty()) request_cover_async(track, key);
+          }
+
+          if(image.empty()) image = DISCORD_LOGO_ASSET;
+
+          rpc.getPresence()
+             .setActivityType(discord::ActivityType::Listening)
+             // the status line reads "Listening to <details>" rather than
+             // "Listening to yugen", which is the closest a third party app
+             // gets to how the spotify integration looks
+             .setStatusDisplayType(discord::StatusDisplayType::Details)
+             .setDetails(track.title)
+             .setState(track.artist)
+             .setLargeImageKey(image)
+             .setLargeImageText(track.album.empty() ? "yugen" : track.album)
+             .setStartTimestamp(started)
+             .setEndTimestamp(ends);
+
+          rpc.refresh();
+     }
+
+     // Takes effect immediately: the flag is flipped and the remembered track is
+     // republished, so turning it off takes the status down and turning it on
+     // puts what is playing up without waiting for the next track.
      void set_activity(bool act)
      {
           share_activity_on_dc = act;
 
+          TrackInfo track;
           {
-               std::lock_guard<std::mutex> lk(g_discord_state.mtx);
-               g_discord_state.dirty = true;
+               std::lock_guard<std::mutex> lk(discord_mtx);
+               track = discord_track;
           }
 
-          g_discord_state.cv.notify_one();
+          publish_activity(track);
      }
 
      // Read by the ui on startup, so the switch comes up matching the real state.

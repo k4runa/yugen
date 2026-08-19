@@ -155,7 +155,7 @@ type Bridge = {
     get_lyrics(title: string, artist: string): Promise<string>
     set_activity(state: boolean): Promise<void>
     get_activity(): Promise<boolean>
-    play_music(path: string): Promise<void>
+    play_music(path: string, title: string, artist: string, album: string): Promise<void>
     get_position(): Promise<number>
     get_length(): Promise<number>
     stop(): Promise<void>
@@ -965,7 +965,10 @@ export default function App() {
     }
 
     async function play_music(name: string) {
-        await bridge().play_music(FILE_PATH + name)
+        // the tags travel with the call: the backend needs them for the discord
+        // status and this side has already read them into metadata_map
+        const meta = metadata_map[name] ?? []
+        await bridge().play_music(FILE_PATH + name, meta[0] || name, meta[1] || "", meta[2] || "")
         set_current(name)
         set_paused(false)
     }

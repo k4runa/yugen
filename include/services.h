@@ -2,16 +2,12 @@
 
 // standard library
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 // third party
-#include <discordpp.h>
 #include <nlohmann/json.hpp>
 
 // project
@@ -25,43 +21,35 @@ namespace yugen
      std::string data_dir();
 
      /*
-      * Discord rich presence. The playing track is written here by whichever
-      * thread called play(), and the background thread started by start_discord()
-      * picks it up and pushes it to the discord client.
+      * Discord rich presence, over the rpc socket the discord client listens on.
+      * There is no login: the client is already signed in, and an application id
+      * is all it wants to know which app the status belongs to.
+      *
+      * The library runs its own worker thread that connects, reconnects and
+      * writes, so nothing here blocks and yugen keeps no thread of its own. What
+      * is kept is the playing track, so that switching sharing back on can
+      * publish it without waiting for the next one.
       */
-     // set from the ui through set_activity(), read by the presence thread when
-     // it decides whether to publish - atomic because those are two threads
-     inline std::atomic<bool> share_activity_on_dc = true;
-
      struct TrackInfo
      {
           std::string title;
           std::string artist;
           std::string album;
+          std::string file_path; // what the cover is looked up by
      };
 
-     // handed from the audio thread to the presence thread; every field
-     // except `running` is guarded by `mtx`
-     struct DiscordState
-     {
-          std::mutex mtx;
-          std::condition_variable cv;
-          TrackInfo current_track;
-          bool dirty = false; // is there a new track?
-          std::atomic<bool> running {false};
-     };
-
-     inline DiscordState g_discord_state;
-     inline std::thread  g_discord_thread;
-
-     // start_discord() connects and leaves the presence thread running until
-     // stop_discord() joins it; both are called once, from start()
+     // start_discord() opens the connection, stop_discord() clears the status and
+     // closes it; both are called once, from start()
      void start_discord(std::uint64_t app_id);
      void stop_discord();
 
-     // whether the current track is shared as a discord activity; the thread
-     // keeps running when this is off, it just publishes nothing. changing it
-     // applies right away - see set_activity()
+     // hands the playing track to discord, or takes the status down when sharing
+     // is off; called on every track change
+     void publish_activity(const TrackInfo& track);
+
+     // whether the track is shared as a discord activity. changing it applies
+     // right away: turning it off takes the status down, turning it on puts the
+     // track that is playing up
      void set_activity(bool act);
      bool get_activity();
 
@@ -90,6 +78,11 @@ namespace yugen
 
                // artwork, returned base64 encoded so the ui can inline it
                static std::string get_cover(const std::string& file_path);
+
+               // a public url of the cover, which is what discord needs - it
+               // fetches the image itself and cannot see the local file. empty
+               // when the track is not found
+               static std::string lookup_cover_url(const std::string& title, const std::string& artist);
                static std::string base64_encode(const unsigned char* data, std::size_t len);
 
           private:

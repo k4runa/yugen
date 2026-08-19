@@ -13,8 +13,11 @@ find_package(CURL REQUIRED)
 
 pkg_check_modules(TAGLIB REQUIRED taglib)
 
-# saucer (webview) and nlohmann_json are pinned to a tag and built from
-# source on the first configure, then cached under build/_deps.
+# saucer (webview), nlohmann_json and the discord rpc library are pinned and
+# built from source on the first configure, then cached under build/_deps.
+#
+# discord-presence pulls glaze in itself, but only when the target does not
+# exist yet - saucer already brings the same version, so it is reused.
 include(FetchContent)
 
 FetchContent_Declare(
@@ -29,17 +32,13 @@ FetchContent_Declare(
     GIT_TAG v3.11.3
 )
 
-FetchContent_MakeAvailable(saucer json)
-
-# The discord social sdk ships as a prebuilt .so with headers next to it,
-# so there is nothing to build - only a path to point the linker at.
-set(DISCORD_SDK_DIR
-    ${CMAKE_CURRENT_SOURCE_DIR}/discord_social_sdk
+FetchContent_Declare(
+    discord-presence
+    GIT_REPOSITORY "https://github.com/onegen-dev/discord-presence.git"
+    GIT_TAG 3b50b0854ec24f9b2d4cc8e28f9145f276bb998e
 )
 
-set(DISCORD_SDK_LIB
-    ${DISCORD_SDK_DIR}/lib/release/libdiscord_partner_sdk.so
-)
+FetchContent_MakeAvailable(saucer json discord-presence)
 
 # The executable itself.
 add_executable(${PROJECT_NAME}
@@ -50,7 +49,6 @@ add_executable(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${TAGLIB_INCLUDE_DIRS}
-    ${DISCORD_SDK_DIR}/include
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
@@ -64,12 +62,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     saucer::saucer
     CURL::libcurl
     discord-rpc
-    ${DISCORD_SDK_LIB}
-)
-
-# the sdk .so is not installed system wide, so the binary carries its path
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    BUILD_RPATH "${DISCORD_SDK_DIR}/lib/release"
 )
 
 # Installation.
