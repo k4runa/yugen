@@ -13,6 +13,9 @@ find_package(CURL REQUIRED)
 
 pkg_check_modules(TAGLIB REQUIRED taglib)
 
+# EXCLUDE_FROM_ALL keeps their own install rules out of ours, so installing
+# yugen does not drop saucer's headers and cmake config into the prefix.
+#
 # saucer (webview), nlohmann_json and the discord rpc library are pinned and
 # built from source on the first configure, then cached under build/_deps.
 #
@@ -24,24 +27,28 @@ FetchContent_Declare(
     saucer
     GIT_REPOSITORY "https://github.com/saucer/saucer"
     GIT_TAG v8.0.5
+    EXCLUDE_FROM_ALL
 )
 
 FetchContent_Declare(
     json
     GIT_REPOSITORY "https://github.com/nlohmann/json.git"
     GIT_TAG v3.11.3
+    EXCLUDE_FROM_ALL
 )
 
 FetchContent_Declare(
     saucer-embed
     GIT_REPOSITORY "https://github.com/saucer/embed"
     GIT_TAG v1.1.1
+    EXCLUDE_FROM_ALL
 )
 
 FetchContent_Declare(
     discord-presence
     GIT_REPOSITORY "https://github.com/onegen-dev/discord-presence.git"
     GIT_TAG 3b50b0854ec24f9b2d4cc8e28f9145f276bb998e
+    EXCLUDE_FROM_ALL
 )
 
 FetchContent_MakeAvailable(saucer json saucer-embed discord-presence)
@@ -88,5 +95,16 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     discord-rpc
 )
 
-# Installation.
+# Installation. The default prefix is /usr/local, so `sudo cmake --install build`
+# puts the binary on PATH and registers the desktop entry with it.
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+
+install(FILES assets/yugen.desktop DESTINATION share/applications)
+
+# the icon theme wants one file per size, each named after the application, so
+# the sizes that exist in assets/icons are renamed into their hicolor directory
+foreach(SIZE 16 32 48 128 256 512)
+    install(FILES  assets/icons/yugen_${SIZE}.png
+            DESTINATION share/icons/hicolor/${SIZE}x${SIZE}/apps
+            RENAME yugen.png)
+endforeach()

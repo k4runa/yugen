@@ -43,6 +43,21 @@ cmake -B build -G Ninja && cmake --build build
 
 CMake picks up `ui/dist` when it configures and refuses to build without it. Re-running the build re-embeds whatever is in `ui/dist` at that point, so after changing the UI it is `npm run build` and then `cmake --build build`.
 
+## Installing
+
+```sh
+sudo cmake --install build
+```
+
+That is the binary into `/usr/local/bin`, the desktop entry into `/usr/local/share/applications` and the icons into `/usr/local/share/icons/hicolor`, so yugen shows up in the application menu. If the icon does not appear right away:
+
+```sh
+sudo gtk-update-icon-cache /usr/local/share/icons/hicolor
+sudo update-desktop-database /usr/local/share/applications
+```
+
+Only yugen's own files are installed — the fetched dependencies are declared `EXCLUDE_FROM_ALL`, so their headers and CMake config stay out of the prefix.
+
 ## Running
 
 ```sh

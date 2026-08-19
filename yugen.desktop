@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Yugen
+Comment=Music Player
+Exec=/usr/local/bin/yugen
+Icon=yugen
+Type=Application
+Categories=Audio;Music;Player;
+Keywords=music;player;audio;

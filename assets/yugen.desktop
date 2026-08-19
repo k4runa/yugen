@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=yugen
+GenericName=Music Player
+Comment=Play, search and download music
+Exec=yugen
+Icon=yugen
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;audio;player;
+StartupNotify=true
+StartupWMClass=yugen
