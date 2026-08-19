@@ -4,3 +4,9 @@ build/
 _deps/
 ui/node_modules/
 ui/dist/
+
+# heaptrack / profiler output
+heaptrack.*.zst
+
+# vendored discord social sdk (downloaded, not part of the source tree)
+discord_social_sdk/

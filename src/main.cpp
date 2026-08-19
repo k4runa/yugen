@@ -1,58 +1,158 @@
-
 #define MINIAUDIO_IMPLEMENTATION
+#define DISCORDPP_IMPLEMENTATION
 
-#include "coco/stray/stray.hpp"
-#include "saucer/app.hpp"
-#include "saucer/window.hpp"
-#include "services.h"
-#include "miniaudio.h"
-#include "saucer/executor.hpp"
+#ifndef APPLICATION_ID
+#define APPLICATION_ID 1539558939463786516
+#endif
 
-#include <string_view>
+// standard library
+#include <cstdint>
+#include <filesystem>
+#include <print>
+#include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
-#include <saucer/smartview.hpp>
-#include <string>
-#include <print>
-#include <filesystem>
 
+// third party
+#include <coco/stray/stray.hpp>
+#include <saucer/app.hpp>
+#include <saucer/executor.hpp>
+#include <saucer/smartview.hpp>
+#include <saucer/window.hpp>
+
+// project
+#include "miniaudio.h"
+#include "services.h"
 
 namespace fs = std::filesystem;
+
 using mm = yugen::MusicManager;
 using sm = yugen::SoundManager;
 using co = yugen::Core;
 
-coco::stray start(saucer::application *app)
+namespace
+{
+     // the ui is served by vite in dev; point this at the built bundle to ship
+     constexpr const char* UI_URL = "http://localhost:5173/";
+
+     constexpr int WINDOW_MIN_WIDTH = 720;
+     constexpr int WINDOW_MIN_HEIGHT = 440;
+
+     /*
+      * expose_async
+      *
+      * Anything that touches the disk, the network or yt-dlp would freeze the
+      * window if it ran on the ui thread, so it is moved to a worker thread and
+      * answered later through saucer's executor, which resolves the javascript
+      * promise on the other side of the bridge.
+      *
+      * That wrapping is the same every time, so instead of repeating it in every
+      * binding it is written once here and the bindings only say what the work is:
+      *
+      *     expose_async(webview, "next", [] { return sm::next_song(); });
+      *
+      * How it works: async_binding reads the argument and return types straight
+      * off the lambda's operator(), and make_async builds a second lambda that
+      * takes those same arguments plus the executor saucer wants as the last
+      * parameter. Whatever the lambda returns is what the promise resolves with;
+      * returning void resolves an empty one.
+      */
+     template <typename Result, typename... Args, typename Fn>
+     auto make_async(Fn fn)
+     {
+          return [fn = std::move(fn)](Args... args, saucer::executor<Result> exec)
+          {
+               std::thread worker{[fn, ...args = std::move(args), exec = std::move(exec)]() mutable
+               {
+                    if constexpr(std::is_void_v<Result>)
+                    {
+                         fn(std::move(args)...);
+                         exec.resolve();
+                    }
+                    else
+                    {
+                         exec.resolve(fn(std::move(args)...));
+                    }
+               }};
+
+               worker.detach();
+          };
+     }
+
+     // reads the argument and return types back off the lambda's call operator
+     template <typename Fn>
+     struct async_binding : async_binding<decltype(&Fn::operator())>
+     {
+     };
+
+     template <typename Class, typename Result, typename... Args>
+     struct async_binding<Result (Class::*)(Args...) const>
+     {
+          template <typename Fn>
+          static auto wrap(Fn fn)
+          {
+               return make_async<Result, Args...>(std::move(fn));
+          }
+     };
+
+     void expose_async(auto& webview, const std::string& name, auto fn)
+     {
+          webview->expose(name, async_binding<decltype(fn)>::wrap(std::move(fn)));
+     }
+}
+
+coco::stray start(saucer::application* app)
 {
      auto window = saucer::window::create(app).value();
      auto webview = saucer::smartview::create({.window = window});
 
      ma_engine engine;
 
-     ma_result res = ma_engine_init(NULL, &engine);
-     if(res != MA_SUCCESS) {
-          std::println("[ERROR]: Engine init failed: {}", (int)(res));
+     const ma_result res = ma_engine_init(nullptr, &engine);
+     if(res != MA_SUCCESS)
+     {
+          std::println("[ERROR] Engine init failed: {}", static_cast<int>(res));
      }
 
      fs::create_directories(yugen::data_dir());
-
 
      window->set_title("yugen");
 
      // the webkit menu can't be edited, so it is turned off and drawn in the ui instead
      webview->set_context_menu(false);
 
-     webview->expose("fetch_songs", [&](const std::string& file_path) -> std::vector<std::string> {
-          std::println("[INFO] Fetching songs on {}", file_path);
-          const auto res = sm::fetch_songs(file_path); 
-          return res;
-     });
-     
-     webview->expose("play_music", [&](const std::string& file_path) {
-          sm::play(&engine, file_path);
+     yugen::start_discord(APPLICATION_ID);
+
+     /*
+      * Playback control. miniaudio only flips state on a sound that is already
+      * loaded, so these return in microseconds and answer on the ui thread
+      * directly. seek() is the exception - it can pull new frames from the file.
+      */
+     webview->expose("play_music", [&](const std::string& file_path, const std::string& title,
+          const std::string& artist, const std::string& album) {
+          sm::play(&engine, file_path, title, artist, album);
      });
 
+     webview->expose("resume", [] {
+          sm::resume();
+     });
+
+     webview->expose("stop", [] {
+          sm::stop();
+     });
+
+     webview->expose("toggle_loop", [](bool state) {
+          std::println("[INFO] Toggle loop: {}", state);
+          sm::toggle_loop();
+     });
+
+     expose_async(webview, "seek", [](float position) {
+          sm::seek(position);
+     });
+
+     // polled by the ui while a track runs, so these stay synchronous and cheap
      webview->expose("get_position", []() -> float {
           return sm::get_pos();
      });
@@ -60,216 +160,171 @@ coco::stray start(saucer::application *app)
      webview->expose("get_length", []() -> float {
           return sm::get_len();
      });
-     
-     webview->expose("stop", []() {
-          sm::stop();
-     });
-
-     webview->expose("resume", []() {
-          sm::resume();
-     });
-
-     webview->expose("toggle_loop", [](bool state){
-          std::println("[INFO]: Toggle loop: {}", state);
-          sm::toggle_loop();
-     });
-
-     webview->expose("get_metadata", [&](const std::string& file_path) -> std::vector<std::string> {
-          std::println("[INFO] Get metadata: {}", file_path);
-          return sm::get_metadata(file_path);
-     });
-
-     webview->expose("get_cover", [&](const std::string& file_path) -> std::string {
-          std::println("[INFO] Get cover: {}", file_path);
-          return co::get_cover(file_path);
-     });
-
-     webview->expose("search_yt", [&](std::string query, int count, saucer::executor<std::vector<std::string>> exec) {
-          std::println("[INFO] Searching on youtube - query: {}", query);
-          std::thread t{[query, count, exec = std::move(exec)]() {
-               auto results = co::search_youtube(query, count);
-               exec.resolve(results);
-          }};
-          t.detach();
-     });
-
-     webview->expose("search_sc", [&](std::string query, int count, saucer::executor<std::vector<std::string>> exec) {
-          std::println("[INFO] Searching on sound cloud - query: {}", query);
-          std::thread t{[query, count, exec = std::move(exec)]() {
-               auto results = co::search_sound_cloud(query, count);
-               exec.resolve(results);
-          }};
-          t.detach();
-     });
-
-     webview->expose("download_yt", [&](std::string id,  std::string output_path, saucer::executor<std::string> exec) {
-          std::println("[INFO] Download from youtube - id: {}", id);
-          std::thread t{[id, output_path, exec = std::move(exec)]() {
-               auto results = co::download_from_yt(id, output_path);
-               exec.resolve(results);
-          }};
-          t.detach();
-     });
-
-     webview->expose("download_sc", [&](std::string url,  std::string output_path, saucer::executor<std::string> exec) {
-          std::println("[INFO] Download from sound cloud - url: {}", url);
-          std::thread t{[url, output_path, exec = std::move(exec)]() {
-               auto results = co::download_from_sc(url, output_path);
-               exec.resolve(results);
-          }};
-          t.detach();
-     });
-
-     webview->expose("get_liked_songs", [&](saucer::executor<std::vector<std::string>> exec) {
-          std::println("[INFO] Fetched liked songs");
-          std::thread t{[exec = std::move(exec)]() {
-               auto results = mm::get_liked_songs();
-               exec.resolve(results);
-          }};
-          t.detach();
-     });
-
-     webview->expose("like_song", [&](std::string song_name, saucer::executor<void> exec) {
-          std::println("[INFO] Liked song: {}", song_name);
-          std::thread t{[song_name, exec = std::move(exec)]() {
-               mm::like_song(song_name);
-               exec.resolve();
-          }};
-          t.detach();
-     });
-
-     webview->expose("unlike_song", [&](std::string song_name, saucer::executor<void> exec) {
-          std::println("[INFO] Unliked song: {}", song_name);
-          std::thread t{[song_name, exec = std::move(exec)]() {
-               mm::unlike_song(song_name);
-               exec.resolve();
-          }};
-          t.detach();
-     });
-
-     webview->expose("shuffle", [&](std::vector<std::string> songs, saucer::executor< std::vector<std::string>> exec) {
-          std::println("[INFO] Shuffled songs"); 
-          std::thread t{[songs, exec = std::move(exec)]() {
-               auto res = mm::shuffle_songs(songs);
-               exec.resolve(res);
-          }};
-          t.detach();
-     });
-     
-     webview->expose("next", [&](saucer::executor<std::string> exec) {
-          std::thread t{[exec = std::move(exec)]() {
-               auto res = sm::next_song();
-               exec.resolve(res);
-          }};
-          t.detach();
-     });
 
      webview->expose("is_finished", []() -> bool {
           return sm::is_finished();
      });
 
-     webview->expose("prev", [&](saucer::executor<std::string> exec) {
-          std::thread t{[exec = std::move(exec)]() {
-               auto res = sm::prev_song();
-               exec.resolve(res);
-          }};
-          t.detach();
+     /*
+      * Queue. next/prev only return the file name of the neighbouring track;
+      * the ui decides what to do with it and calls play_music itself.
+      */
+     expose_async(webview, "next", [] {
+          return sm::next_song();
      });
 
-     webview->expose("delete_song", [&](std::string file_path, saucer::executor<void> exec) {
+     expose_async(webview, "prev", [] {
+          return sm::prev_song();
+     });
+
+     expose_async(webview, "shuffle", [](std::vector<std::string> songs) {
+          std::println("[INFO] Shuffled songs");
+          return mm::shuffle_songs(songs);
+     });
+
+     /*
+      * The library on disk. These read files, so they are called once per track
+      * when a folder is opened and the results are kept on the ui side.
+      */
+     webview->expose("fetch_songs", [](const std::string& file_path) -> std::vector<std::string> {
+          std::println("[INFO] Fetching songs on {}", file_path);
+          return sm::fetch_songs(file_path);
+     });
+
+     webview->expose("get_metadata", [](const std::string& file_path) -> std::vector<std::string> {
+          std::println("[INFO] Get metadata: {}", file_path);
+          return sm::get_metadata(file_path);
+     });
+
+     webview->expose("get_cover", [](const std::string& file_path) -> std::string {
+          std::println("[INFO] Get cover: {}", file_path);
+          return co::get_cover(file_path);
+     });
+
+     expose_async(webview, "delete_song", [](std::string file_path) {
           std::println("[INFO] Deleted song: {}", file_path);
-          std::thread t{[file_path, exec = std::move(exec)]() {
-               sm::delete_song(file_path);
-               exec.resolve();
-          }};
-          t.detach();
+          sm::delete_song(file_path);
      });
 
-     webview->expose("seek", [&](float position, saucer::executor<void> exec) {
-          std::thread t{[position, exec = std::move(exec)]() {
-               sm::seek(position);
-               exec.resolve();
-          }};
-          t.detach();
+     /*
+      * Search and download. Every one of these starts a yt-dlp process and waits
+      * for it, which takes seconds for a search and minutes for a download, so
+      * they all go through expose_async.
+      */
+     expose_async(webview, "search_yt", [](std::string query, int count) {
+          std::println("[INFO] Searching on youtube - query: {}", query);
+          return co::search_youtube(query, count);
      });
 
-     webview->expose("add_to_playlist", [&](std::string playlist_name, std::string file_path, saucer::executor<bool> exec) {
+     expose_async(webview, "search_sc", [](std::string query, int count) {
+          std::println("[INFO] Searching on sound cloud - query: {}", query);
+          return co::search_sound_cloud(query, count);
+     });
+
+     expose_async(webview, "download_yt", [](std::string id, std::string output_path) {
+          std::println("[INFO] Download from youtube - id: {}", id);
+          return co::download_from_yt(id, output_path);
+     });
+
+     expose_async(webview, "download_sc", [](std::string url, std::string output_path) {
+          std::println("[INFO] Download from sound cloud - url: {}", url);
+          return co::download_from_sc(url, output_path);
+     });
+
+     /*
+      * Liked songs, stored as a flat array of file names in liked_songs.json.
+      */
+     expose_async(webview, "get_liked_songs", [] {
+          std::println("[INFO] Fetched liked songs");
+          return mm::get_liked_songs();
+     });
+
+     expose_async(webview, "like_song", [](std::string song_name) {
+          std::println("[INFO] Liked song: {}", song_name);
+          mm::like_song(song_name);
+     });
+
+     expose_async(webview, "unlike_song", [](std::string song_name) {
+          std::println("[INFO] Unliked song: {}", song_name);
+          mm::unlike_song(song_name);
+     });
+
+     /*
+      * Playlists. The sidebar asks for the names, opening one asks for its tracks,
+      * and the mutating calls answer with a bool the ui uses to decide whether to
+      * refresh the list.
+      */
+     expose_async(webview, "get_playlists", [] {
+          return mm::get_playlists();
+     });
+
+     expose_async(webview, "get_playlist", [](std::string playlist_name) {
+          return mm::get_playlist(playlist_name);
+     });
+
+     expose_async(webview, "create_playlist", [](std::string playlist_name) {
+          std::println("[INFO] Create playlist: {}", playlist_name);
+          return mm::create_playlist(playlist_name);
+     });
+
+     expose_async(webview, "delete_playlist", [](std::string playlist_name) {
+          std::println("[INFO] Delete playlist: {}", playlist_name);
+          return mm::delete_playlist(playlist_name);
+     });
+
+     expose_async(webview, "rename_playlist", [](std::string playlist_name, std::string new_playlist_name) {
+          std::println("[INFO] Rename playlist: {} -> {}", playlist_name, new_playlist_name);
+          return mm::rename_playlist(playlist_name, new_playlist_name);
+     });
+
+     expose_async(webview, "add_to_playlist", [](std::string playlist_name, std::string file_path) {
           std::println("[INFO] Add {} to {}", file_path, playlist_name);
-          std::thread t{[playlist_name, file_path, exec = std::move(exec)]() {
-               auto res = mm::add_to_playlist(playlist_name, file_path);
-               exec.resolve(res);
-          }};
-          t.detach();
+          return mm::add_to_playlist(playlist_name, file_path);
      });
 
-     webview->expose("remove_from_playlist", [&](std::string playlist_name, std::string file_path, saucer::executor<bool> exec) {
+     expose_async(webview, "remove_from_playlist", [](std::string playlist_name, std::string file_path) {
           std::println("[INFO] Delete {} from {}", file_path, playlist_name);
-          std::thread t{[playlist_name, file_path, exec = std::move(exec)]() {
-               auto res = mm::remove_from_playlist(playlist_name, file_path);
-               exec.resolve(res);
-          }};
-          t.detach();
+          return mm::remove_from_playlist(playlist_name, file_path);
      });
 
-     // the sidebar needs the names, and opening one needs its tracks
-     webview->expose("get_playlists", [&](saucer::executor<std::vector<std::string>> exec) {
-          std::thread t{[exec = std::move(exec)]() {
-               exec.resolve(mm::get_playlists());
-          }};
-          t.detach();
-     });
-
-     webview->expose("get_playlist", [&](std::string playlist_name, saucer::executor<std::vector<std::string>> exec) {
-          std::thread t{[playlist_name, exec = std::move(exec)]() {
-               exec.resolve(mm::get_playlist(playlist_name));
-          }};
-          t.detach();
-     });
-
-     webview->expose("create_playlist", [&](std::string playlist_name, saucer::executor<bool> exec) {
-          std::println("[INFO] Create playist: {}", playlist_name);
-          std::thread t{[playlist_name, exec = std::move(exec)]() {
-               auto res = mm::create_playlist(playlist_name);
-               exec.resolve(res);
-          }};
-          t.detach();
-     });
-     
-     webview->expose("delete_playlist", [&](std::string playlist_name, saucer::executor<bool> exec) {
-          std::println("[INFO] Delete playist: {}", playlist_name);
-          std::thread t{[playlist_name, exec = std::move(exec)]() {
-               auto res = mm::delete_playlist(playlist_name);
-               exec.resolve(res);
-          }};
-          t.detach();
-     });
-
-     webview->expose("rename_playlist", [&](std::string playlist_name, std::string new_playlist_name ,saucer::executor<bool> exec) {
-          std::println("[INFO] Delete playist: {}", playlist_name);
-          std::thread t{[playlist_name, new_playlist_name, exec = std::move(exec)]() {
-               auto res = mm::rename_playlist(playlist_name, new_playlist_name);
-               exec.resolve(res);
-          }};
-          t.detach();
-     });
-     
-     webview->expose("get_lyrics", [&](std::string title, std::string artist ,saucer::executor<std::string> exec) {
+     /*
+      * Lyrics, fetched from lrclib. The panel gets the raw sheet back and does
+      * its own parsing, timed or not.
+      */
+     expose_async(webview, "get_lyrics", [](std::string title, std::string artist) {
           std::println("[INFO] Fetching lyrics for {} - {}", title, artist);
-          std::thread t{[title, artist, exec = std::move(exec)]() {
-               auto res = co::get_lyrics(title, artist);
-               exec.resolve(res);
-          }};
-          t.detach();
+          return co::get_lyrics(title, artist);
      });
 
-     webview->set_url("http://localhost:5173/");
-     window->set_min_size({720, 440});
+     /*
+      * Discord. Both of these only touch a flag: the presence thread is started
+      * at launch and keeps running either way, it just stops being told about
+      * track changes while sharing is off. The getter is what the ui reads on
+      * startup to draw the switch in the right position, since the setting lives
+      * on this side and not in the page.
+      */
+     webview->expose("set_activity", [](bool state) {
+          yugen::set_activity(state);
+          std::println("[INFO] Share activity on discord: {}", state);
+     });
+
+     webview->expose("get_activity", [] {
+          return yugen::get_activity();
+     });
+
+     /*
+      * The window is set up last, once every binding exists, so the page cannot
+      * load and call into a function that has not been exposed yet.
+      */
+     webview->set_url(UI_URL);
+     window->set_min_size({WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT});
      window->set_maximized(true);
      window->set_decorations(saucer::window::decoration::none);
      window->show();
 
      co_await app->finish();
 
+     yugen::stop_discord();
      ma_engine_uninit(&engine);
 }
 

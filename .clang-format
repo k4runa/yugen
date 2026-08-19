@@ -1,0 +1,6 @@
+# yugen is hand-formatted on purpose: the 5-space indent, the aligned
+# declaration blocks in services.h and the grouped includes are all
+# deliberate and no formatter reproduces them. This file exists so that
+# editors and IDEs that auto-run clang-format leave the sources alone.
+DisableFormat: true
+SortIncludes: Never
