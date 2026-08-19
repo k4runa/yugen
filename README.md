@@ -9,12 +9,14 @@ A desktop music player for Linux. The backend is C++ ([saucer](https://github.co
 - Playlists: create, rename, delete, add/remove tracks
 - Liked songs
 - Queue with next/prev, shuffle, loop and seeking
-- Custom window chrome — native decorations and the WebKit context menu are off, everything is drawn in the UI
+- Lyrics from [lrclib](https://lrclib.net) — a synced sheet follows the track line by line and any line can be clicked to seek there, an unsynced one is shown as plain text
+- The cover of the playing track colours the interface: its dominant hue drives every accent, and the artwork itself sits behind the app at an adjustable strength
+- Custom window chrome — native decorations, the WebKit context menu and its tooltips are all off, and the menus and tooltips are drawn in the UI instead
 
 ## Requirements
 
 - CMake 3.10+, a C++20 compiler, `pkg-config`
-- `taglib` (dev package)
+- `taglib` and `libcurl` (dev packages)
 - The [saucer](https://github.com/saucer/saucer) system dependencies (WebKitGTK on Linux)
 - `yt-dlp` and `ffmpeg` on `PATH` — needed for search and downloads
 - Node.js for the UI
@@ -66,7 +68,7 @@ Playlists and liked songs are stored as JSON under `~/.config/yugen/`:
 - `playlists.json`
 - `liked_songs.json`
 
-Similar UI preferences go into `localStorage`, such as window layout, pinned playlists, etc.. (WebKit keeps it under `~/.local/share/yugen`).
+Similar UI preferences go into `localStorage`, such as window layout, pinned playlists, cover tint, etc.. (WebKit keeps it under `~/.local/share/yugen`).
 
 ## Note
 

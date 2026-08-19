@@ -252,9 +252,18 @@ coco::stray start(saucer::application *app)
           }};
           t.detach();
      });
+     
+     webview->expose("get_lyrics", [&](std::string title, std::string artist ,saucer::executor<std::string> exec) {
+          std::println("[INFO] Fetching lyrics for {} - {}", title, artist);
+          std::thread t{[title, artist, exec = std::move(exec)]() {
+               auto res = co::get_lyrics(title, artist);
+               exec.resolve(res);
+          }};
+          t.detach();
+     });
 
      webview->set_url("http://localhost:5173/");
-     window->set_min_size({1200, 920});
+     window->set_min_size({720, 440});
      window->set_maximized(true);
      window->set_decorations(saucer::window::decoration::none);
      window->show();

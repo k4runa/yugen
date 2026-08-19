@@ -1,11 +1,14 @@
 cmake_minimum_required(VERSION 3.10)
 project(yugen CXX)
 
-set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_STANDARD 20)
+
 
 find_package(PkgConfig REQUIRED)
+find_package(CURL REQUIRED)
+
 pkg_check_modules(TAGLIB REQUIRED taglib)
 
 add_executable(yugen
@@ -36,8 +39,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(saucer)
 FetchContent_MakeAvailable(json)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE saucer::saucer)
 target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${TAGLIB_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} PRIVATE saucer::saucer)
+target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
 
 install(TARGETS yugen DESTINATION bin)

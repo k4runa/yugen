@@ -1,3 +1,5 @@
+@import '@fontsource-variable/inter';
+
 *,
 *::before,
 *::after {
@@ -19,10 +21,16 @@ body {
   margin: 0;
   /* real SF when this ever runs on a mac, Inter as the stand-in everywhere else */
   font-family:
-    -apple-system, BlinkMacSystemFont, 'Inter', 'Inter Variable', system-ui,
+    -apple-system, BlinkMacSystemFont, 'Inter Variable', Inter, system-ui,
     'Segoe UI', Roboto, sans-serif;
   font-size: 0.875rem;
-  letter-spacing: -0.006em;
+  font-optical-sizing: auto;
+  letter-spacing: -0.011em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: #0a0a0c;
+}
+
+::selection {
+  background: hsl(var(--art-h, 0) var(--art-s, 0%) 55% / 0.3);
 }

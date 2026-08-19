@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -27,11 +28,14 @@ namespace yugen
                static std::string download_from_sc(const std::string& url, const std::string& output_path);
                static std::vector<std::string> search_sound_cloud(const std::string& query, int count);
                static std::vector<std::string> search_youtube(const std::string& query, int count);
+               static std::string get_lyrics(const std::string& title, const std::string& artist);
                static std::string base64_encode(const unsigned char* data, size_t len);
                static std::string get_cover(const std::string& file_path);
+               static std::string fetch_url(const std::string& url);
 
           private:
-               //Nothing here
+               static std::size_t write_callback(void* contents, std::size_t size, 
+                    std::size_t nmemb, std::string* output);
      };
      class SoundManager 
      {

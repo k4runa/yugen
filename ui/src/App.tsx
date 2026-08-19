@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const FILE_PATH = '/home/g4lice/Musics/'
 const LAYOUT_KEY = 'yugen.layout'
+
+const AURA_RANGE = [0, 100] as const
 
 // widths are shares of the window, so the columns keep following it after a manual resize.
 // the rem pair is the floor/ceiling css clamps them to at extreme window sizes.
@@ -66,7 +68,18 @@ function stored_pins(): string[] {
     }
 }
 
-function save_pref(key: string, value: string | string[] | boolean) {
+function stored_number(key: string, fallback: number, [min, max]: readonly [number, number]) {
+    try {
+        const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')[key]
+        return typeof value === 'number' && Number.isFinite(value)
+            ? Math.min(Math.max(value, min), max)
+            : fallback
+    } catch {
+        return fallback
+    }
+}
+
+function save_pref(key: string, value: string | string[] | boolean | number) {
     try {
         const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')
         localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...saved, [key]: value }))
@@ -139,6 +152,7 @@ type Bridge = {
     fetch_songs(path: string): Promise<string[]>
     get_metadata(path: string): Promise<string[]>
     get_cover(path: string): Promise<string>
+    get_lyrics(title: string, artist: string): Promise<string>
     play_music(path: string): Promise<void>
     get_position(): Promise<number>
     get_length(): Promise<number>
@@ -173,6 +187,11 @@ declare global {
     }
 }
 
+// webkit draws the native title tooltip itself and no stylesheet can reach it, so
+// it is off everywhere and .tip below replaces it. spread onto anything that needs
+// a label: the same string doubles as the accessible name for the icon-only buttons.
+const tip = (text: string) => ({ 'data-tip': text, 'aria-label': text })
+
 // saucer injects the bridge on the window at runtime
 const bridge = () => window.saucer.exposed
 
@@ -197,6 +216,231 @@ function format_date(seconds: number) {
         month: 'short',
         year: 'numeric',
     })
+}
+
+/* ---------- artwork atmosphere ---------- */
+
+// the cover art is what the glass has to refract, so it is also what colours the app.
+// one small canvas read per track: the cover is a data uri, so nothing taints it.
+const ART_SIZE = 28
+
+function art_accent(data: string): Promise<[number, number] | null> {
+    return new Promise((resolve) => {
+        const image = new Image()
+
+        image.onerror = () => resolve(null)
+        image.onload = () => {
+            const canvas = document.createElement('canvas')
+            canvas.width = canvas.height = ART_SIZE
+
+            const context = canvas.getContext('2d', { willReadFrequently: true })
+            if (!context) return resolve(null)
+
+            context.drawImage(image, 0, 0, ART_SIZE, ART_SIZE)
+
+            const { data: pixels } = context.getImageData(0, 0, ART_SIZE, ART_SIZE)
+
+            // 24 hue buckets, each weighted by how colourful and how mid-toned the pixel is:
+            // near-black and near-white pixels carry no usable hue
+            const weight = new Array(24).fill(0)
+            const saturation = new Array(24).fill(0)
+
+            for (let i = 0; i < pixels.length; i += 4) {
+                const r = pixels[i] / 255
+                const g = pixels[i + 1] / 255
+                const b = pixels[i + 2] / 255
+
+                const max = Math.max(r, g, b)
+                const min = Math.min(r, g, b)
+                const light = (max + min) / 2
+                const delta = max - min
+
+                if (delta < 0.08) continue
+
+                const sat = delta / (1 - Math.abs(2 * light - 1))
+                const hue =
+                    60 *
+                    (max === r
+                        ? ((g - b) / delta + 6) % 6
+                        : max === g
+                          ? (b - r) / delta + 2
+                          : (r - g) / delta + 4)
+
+                // a bell around mid lightness, so shadows and blown highlights barely count
+                const score = sat * (1 - Math.abs(light - 0.5) * 1.6)
+                if (score <= 0) continue
+
+                const bucket = Math.floor(hue / 15) % 24
+
+                weight[bucket] += score
+                saturation[bucket] += sat * score
+            }
+
+            let best = -1
+            let top = 0
+
+            for (let i = 0; i < 24; i++) {
+                if (weight[i] > top) {
+                    top = weight[i]
+                    best = i
+                }
+            }
+
+            if (best < 0) return resolve(null)
+
+            // hold the saturation inside a readable band: raw cover values run either
+            // washed out or neon, and both make the accent unusable as a text colour
+            const mean = saturation[best] / weight[best]
+
+            resolve([best * 15 + 7.5, Math.round(Math.min(Math.max(mean, 0.3), 0.72) * 100)])
+        }
+
+        image.src = `data:image/jpeg;base64,${data}`
+    })
+}
+
+/* ---------- lyrics ---------- */
+
+type Line = { at: number; text: string }
+
+// lrclib answers with an lrc body when it has one and flat text when it does not,
+// and get_lyrics hands whichever it got straight through
+const STAMP = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g
+
+function parse_lyrics(raw: string): Line[] | null {
+    const lines: Line[] = []
+
+    for (const row of raw.split(/\r?\n/)) {
+        const stamps = [...row.matchAll(STAMP)]
+        if (!stamps.length) continue
+
+        const text = row.replace(STAMP, '').trim()
+
+        for (const [, m, sec, frac] of stamps) {
+            // the fraction is centiseconds at two digits and milliseconds at three
+            const rest = frac ? Number(frac) / 10 ** frac.length : 0
+
+            lines.push({ at: Number(m) * 60 + Number(sec) + rest, text })
+        }
+    }
+
+    // an lrc file can carry its own metadata tags and nothing else, which is not
+    // a timed lyric sheet
+    if (lines.length < 2) return null
+
+    return lines.sort((a, b) => a.at - b.at)
+}
+
+// the backend is polled once a second, far too coarse to land a lyric on its line,
+// so the gaps are filled in locally and corrected by every poll that arrives
+function useFinePosition(position: number, running: boolean) {
+    const [fine, set_fine] = useState(position)
+
+    // the ticker is rebuilt around every poll that lands, so it always counts up
+    // from the last figure the backend gave rather than from its own last guess
+    useEffect(() => {
+        if (!running) return
+
+        const from = performance.now()
+        const timer = setInterval(
+            () => set_fine(position + (performance.now() - from) / 1000),
+            120,
+        )
+
+        return () => clearInterval(timer)
+    }, [position, running])
+
+    // a seek or a track change moves the poll somewhere the count cannot have
+    // reached, and until the next tick the poll is the one telling the truth
+    return running && Math.abs(fine - position) < 3 ? fine : position
+}
+
+type Tip = { text: string; x: number; y: number; below: boolean }
+
+// one tooltip for the whole app, delegated off [data-tip] and positioned against
+// the viewport. an absolutely placed one would be clipped by the player and the
+// sidebar, both of which have to keep their overflow.
+function useTip() {
+    const [tip, set_tip] = useState<Tip | null>(null)
+
+    useEffect(() => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        let host: HTMLElement | null = null
+
+        const hide = () => {
+            clearTimeout(timer)
+            host = null
+            set_tip(null)
+        }
+
+        const over = (e: PointerEvent) => {
+            const target =
+                (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-tip]') ?? null
+
+            if (target === host) return
+
+            clearTimeout(timer)
+            host = target
+
+            if (!target) return set_tip(null)
+
+            const text = target.dataset.tip
+            if (!text) return set_tip(null)
+
+            // the pause before it appears is what keeps it from strobing as the
+            // cursor crosses a row of buttons
+            timer = setTimeout(() => {
+                const rect = target.getBoundingClientRect()
+                // no room above: it goes under the element instead
+                const below = rect.top < 4.5 * 16
+
+                set_tip({
+                    text,
+                    x: rect.left + rect.width / 2,
+                    y: below ? rect.bottom + 8 : rect.top - 8,
+                    below,
+                })
+            }, 420)
+        }
+
+        document.addEventListener('pointerover', over)
+        document.addEventListener('pointerdown', hide)
+        document.addEventListener('scroll', hide, true)
+        window.addEventListener('blur', hide)
+
+        return () => {
+            clearTimeout(timer)
+            document.removeEventListener('pointerover', over)
+            document.removeEventListener('pointerdown', hide)
+            document.removeEventListener('scroll', hide, true)
+            window.removeEventListener('blur', hide)
+        }
+    }, [])
+
+    return tip
+}
+
+// the outgoing artwork has to stay mounted while it fades, so the backdrop keeps both
+function useCrossfade(src?: string) {
+    const [layers, set_layers] = useState<{ id: number; src?: string }[]>([])
+    const counter = useRef(0)
+
+    useEffect(() => {
+        counter.current += 1
+
+        const entry = { id: counter.current, src }
+
+        set_layers((prev) => [...prev.slice(-1), entry])
+
+        const timer = setTimeout(
+            () => set_layers((prev) => prev.filter((layer) => layer.id === entry.id)),
+            900,
+        )
+
+        return () => clearTimeout(timer)
+    }, [src])
+
+    return layers
 }
 
 /* ---------- icons ---------- */
@@ -240,7 +484,7 @@ function Heart({ liked, on_toggle, size = 15, className = '' }: HeartProps) {
     return (
         <button
             className={`heart${liked ? ' liked' : ''}${className ? ' ' + className : ''}`}
-            title={liked ? 'Remove from liked songs' : 'Add to liked songs'}
+            {...tip(liked ? 'Remove from liked songs' : 'Add to liked songs')}
             onClick={(e) => {
                 e.stopPropagation()
                 on_toggle()
@@ -280,10 +524,16 @@ const ICONS = {
     close: 'M6 6l12 12M18 6 6 18',
     pin: 'M8 3h8v2h-1l1 6h1v2h-4v6h-2v-6H7v-2h1l1-6H8z',
     clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 7v5l3.5 2',
+    aura: 'M9.5 14.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11M14.5 20.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11',
 }
 
 export default function App() {
     const [theme, set_theme] = useState<Theme>('system')
+    // the switch, and how much of the cover reaches the background while it is on:
+    // 0 leaves a scrim over nearly all of it, 100 is the artwork with none at all
+    const [aura_on, set_aura_on] = useState(() => stored_flag('aura_on', true))
+    const [aura, set_aura] = useState(() => stored_number('aura', 50, AURA_RANGE))
+    const [aura_menu, set_aura_menu] = useState<{ x: number; y: number } | null>(null)
     const [view, set_view] = useState<View>('library')
     const [selection, set_selection] = useState<string | null>(null)
 
@@ -304,6 +554,10 @@ export default function App() {
         key: string
         order: string[]
     } | null>(null)
+
+    // name -> whatever lrclib returned for it, '' included: a track with no lyrics
+    // should be asked about once and then left alone
+    const [lyrics, set_lyrics] = useState<Record<string, string>>({})
 
     const [menu, set_menu] = useState<Menu | null>(null)
     const [submenu, set_submenu] = useState(false)
@@ -342,6 +596,10 @@ export default function App() {
         latest: number
     } | null>(null)
 
+    // the sliding indicator behind whichever library row is open
+    const nav_pill = useRef<HTMLDivElement>(null)
+    const sidebar_ref = useRef<HTMLElement>(null)
+
     const [query, set_query] = useState('')
     const [searching, set_searching] = useState(false)
     const [results, set_results] = useState<SearchResult[]>([])
@@ -364,10 +622,94 @@ export default function App() {
     }, [])
 
     useEffect(() => {
+        document.documentElement.style.setProperty('--aura', `${aura / 100}`)
+    }, [aura])
+
+    useEffect(() => {
+        if (!aura_menu) return
+
+        const close = () => set_aura_menu(null)
+        const on_key = (e: KeyboardEvent) => e.key === 'Escape' && close()
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+        window.addEventListener('keydown', on_key)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+            window.removeEventListener('keydown', on_key)
+        }
+    }, [aura_menu])
+
+    useEffect(() => {
         // with no attribute the stylesheet falls back to prefers-color-scheme
         if (theme === 'system') delete document.documentElement.dataset.theme
         else document.documentElement.dataset.theme = theme
     }, [theme])
+
+    // the cover of the current track drives --art-h/--art-s, which every accent
+    // in the stylesheet is mixed from. no cover means the app stays monochrome.
+    const current_cover = current ? covers_map[current] : undefined
+
+    useEffect(() => {
+        const root = document.documentElement
+
+        if (!current_cover) {
+            root.style.removeProperty('--art-h')
+            root.style.removeProperty('--art-s')
+            return
+        }
+
+        let cancelled = false
+
+        art_accent(current_cover).then((accent) => {
+            if (cancelled || !accent) return
+
+            root.style.setProperty('--art-h', `${accent[0]}`)
+            root.style.setProperty('--art-s', `${accent[1]}%`)
+        })
+
+        return () => {
+            cancelled = true
+        }
+    }, [current_cover])
+
+    const ambient = useCrossfade(aura_on ? current_cover : undefined)
+
+    useEffect(() => {
+        if (!current || current in lyrics) return
+
+        let cancelled = false
+
+        bridge()
+            .get_lyrics(title_of(current), artist_of(current))
+            .then((raw) => !cancelled && set_lyrics((prev) => ({ ...prev, [current]: raw ?? '' })))
+            .catch(() => !cancelled && set_lyrics((prev) => ({ ...prev, [current]: '' })))
+
+        return () => {
+            cancelled = true
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- metadata_map feeds the two titles
+    }, [current, metadata_map])
+
+    const active_tip = useTip()
+    const tip_box = useRef<HTMLDivElement>(null)
+
+    // measured after it renders, so a tooltip on a button near either edge slides
+    // back into the window instead of hanging off it
+    useLayoutEffect(() => {
+        const box = tip_box.current
+        if (!box || !active_tip) return
+
+        const half = box.getBoundingClientRect().width / 2
+        const margin = 8
+
+        box.style.left = `${Math.min(
+            Math.max(active_tip.x, half + margin),
+            window.innerWidth - half - margin,
+        )}px`
+    }, [active_tip])
 
     useEffect(() => {
         if (!search_open) return
@@ -1044,8 +1386,13 @@ export default function App() {
     function group_cards(entries: Map<string, string[]>, round?: boolean) {
         return (
             <section className='card-row'>
-                {[...entries].map(([name, tracks]) => (
-                    <div key={name} className='album' onClick={() => set_selection(name)}>
+                {[...entries].map(([name, tracks], i) => (
+                    <div
+                        key={name}
+                        className='album'
+                        style={{ '--i': i } as React.CSSProperties}
+                        onClick={() => set_selection(name)}
+                    >
                         {cover(
                             tracks.find((track) => cover_of(track)) ?? tracks[0],
                             `album-cover${round ? ' round' : ''}`,
@@ -1065,15 +1412,109 @@ export default function App() {
         return rank(a) !== rank(b) ? rank(a) - rank(b) : a.localeCompare(b)
     })
 
+    // the pill is one element that travels between rows, so the selection reads as a
+    // single object moving rather than two highlights blinking
+    useLayoutEffect(() => {
+        const pill = nav_pill.current
+        const host = sidebar_ref.current
+        if (!pill || !host) return
+
+        const active = host.querySelector<HTMLElement>('.nav-item.active')
+
+        if (!active) {
+            pill.style.opacity = '0'
+            return
+        }
+
+        const place = () => {
+            // both are measured against the same origin, so the difference cancels
+            // out whatever the border contributes to offsetTop
+            pill.style.transform = `translateY(${active.offsetTop - pill.offsetTop}px)`
+            pill.style.height = `${active.offsetHeight}px`
+            pill.style.opacity = '1'
+        }
+
+        // nothing to travel from on the first paint, so that one lands without the slide
+        if (pill.style.opacity !== '1') {
+            pill.style.transition = 'none'
+            place()
+            void pill.offsetHeight
+            pill.style.transition = ''
+        } else {
+            place()
+        }
+
+        const observer = new ResizeObserver(place)
+
+        observer.observe(host)
+        observer.observe(active)
+
+        return () => observer.disconnect()
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- the names stand in for the rows
+    }, [view, selection, library_view, sidebar_open, playlist_names.join('\u0000')])
+
     // a playlist shows the cover of the first track that has one
     const playlist_cover = (name: string) =>
         (playlists[name] ?? []).find((track) => cover_of(track))
     // no room on the right half of the window, so the submenu opens leftwards there
     const flip = !!menu && menu.x > window.innerWidth / 2
+    const next_theme: Theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
+
+    const sheet = current ? lyrics[current] : undefined
+    // asked for but not answered yet: the cache holds '' once a track comes back empty
+    const awaiting_lyrics = !!current && !(current in lyrics)
+    const timed = useMemo(() => (sheet ? parse_lyrics(sheet) : null), [sheet])
+
+    const fine_position = useFinePosition(position, !!current && !paused)
+
+    // the line in force is the last one whose stamp has passed
+    const line_now = useMemo(() => {
+        if (!timed) return -1
+
+        let index = -1
+        while (index + 1 < timed.length && timed[index + 1].at <= fine_position + 0.15) index++
+
+        return index
+    }, [timed, fine_position])
+
+    const lyric_box = useRef<HTMLDivElement>(null)
+
+    // the panel keeps the current line centred itself, without dragging the rail
+    // around it, so scrollIntoView is not an option here
+    useEffect(() => {
+        const box = lyric_box.current
+        if (!box || line_now < 0) return
+
+        const line = box.children[line_now] as HTMLElement | undefined
+        if (!line) return
+
+        box.scrollTo({
+            top: line.offsetTop - box.clientHeight / 2 + line.offsetHeight / 2,
+            behavior: 'smooth',
+        })
+    }, [line_now])
+
+    async function seek_to(seconds: number) {
+        await bridge().seek(seconds)
+        set_position(seconds)
+    }
     const view_title = selection ?? NAV.find((item) => item.id === view)?.label ?? 'Playlists'
 
     return (
         <div className='shell' onContextMenu={(e) => e.preventDefault()}>
+            <div className='ambient' aria-hidden>
+                {ambient.map((layer, i) =>
+                    layer.src ? (
+                        <div
+                            key={layer.id}
+                            // the last one is arriving, anything before it is on its way out
+                            className={`ambient-art${i === ambient.length - 1 ? '' : ' out'}`}
+                            style={{ backgroundImage: `url(data:image/jpeg;base64,${layer.src})` }}
+                        />
+                    ) : null,
+                )}
+            </div>
+
             <div
                 className='frame'
                 ref={frame}
@@ -1088,7 +1529,13 @@ export default function App() {
                 }}
             >
                 {sidebar_open && (
-                    <aside className='sidebar' onContextMenu={context({ kind: 'sidebar' })}>
+                    <aside
+                        className='sidebar'
+                        ref={sidebar_ref}
+                        onContextMenu={context({ kind: 'sidebar' })}
+                    >
+                        <div className='nav-pill' ref={nav_pill} aria-hidden />
+
                         <div className='brand'>
                             <span className='brand-mark'>
                                 <i />
@@ -1098,7 +1545,7 @@ export default function App() {
                             yugen
                             <button
                                 className='icon-btn tiny collapse'
-                                title='Hide sidebar'
+                                {...tip('Hide sidebar')}
                                 onClick={toggle_sidebar}
                             >
                                 <Icon d={ICONS.back} size={16} />
@@ -1109,7 +1556,7 @@ export default function App() {
                             Your Library
                             <button
                                 className={`icon-btn tiny${library_menu ? ' on' : ''}`}
-                                title='View as'
+                                {...tip('View as')}
                                 onClick={(e) => {
                                     e.stopPropagation()
 
@@ -1151,14 +1598,14 @@ export default function App() {
                                             className={`tile${
                                                 view === 'playlist' && selection === name ? ' active' : ''
                                             }`}
-                                            title={name}
+                                            {...tip(name)}
                                             onClick={() => open_playlist(name)}
                                             onContextMenu={context({ kind: 'playlist', playlist: name })}
                                         >
                                             {cover(playlist_cover(name) ?? '', 'tile-cover')}
                                             <div className='tile-name ellipsis'>
                                                 {pins.includes(name) && (
-                                                    <span className='pinned' title='Pinned'>
+                                                    <span className='pinned' {...tip('Pinned')}>
                                                         <Icon d={ICONS.pin} size={12} fill />
                                                     </span>
                                                 )}
@@ -1178,7 +1625,7 @@ export default function App() {
                                         onContextMenu={context({ kind: 'playlist', playlist: name })}
                                     >
                                         {pins.includes(name) ? (
-                                            <span className='pinned' title='Pinned'>
+                                            <span className='pinned' {...tip('Pinned')}>
                                                 <Icon d={ICONS.pin} size={17} fill />
                                             </span>
                                         ) : (
@@ -1233,7 +1680,7 @@ export default function App() {
                                     {query && (
                                         <button
                                             className='clear'
-                                            title='Clear'
+                                            {...tip('Clear')}
                                             onClick={(e) => {
                                                 e.stopPropagation()
                                                 set_query('')
@@ -1284,7 +1731,7 @@ export default function App() {
                                                     <button
                                                         key={result.ref}
                                                         className='result'
-                                                        title='Download'
+                                                        {...tip('Download')}
                                                         onClick={() => download(result)}
                                                         disabled={downloading !== null}
                                                     >
@@ -1362,7 +1809,7 @@ export default function App() {
                         {selection && groups && (
                             <button
                                 className='icon-btn back'
-                                title='Back'
+                                {...tip('Back')}
                                 onClick={() => set_selection(null)}
                             >
                                 <Icon d={ICONS.back} size={17} />
@@ -1379,7 +1826,7 @@ export default function App() {
                             <div className='filter-wrap'>
                                 <button
                                     className={`icon-btn filter${filters ? ' on' : ''}`}
-                                    title='Sort and view'
+                                    {...tip('Sort and view')}
                                     onClick={(e) => {
                                         e.stopPropagation()
                                         set_filters(!filters)
@@ -1442,10 +1889,11 @@ export default function App() {
                             )
                         ) : (
                             <section className='card-row'>
-                                {listed.map((name) => (
+                                {listed.map((name, i) => (
                                     <div
                                         key={name}
                                         className='album'
+                                        style={{ '--i': i } as React.CSSProperties}
                                         onClick={() => play_music(name)}
                                         onContextMenu={song_context(name)}
                                     >
@@ -1473,10 +1921,47 @@ export default function App() {
                 {rail_open && (
                     <aside className='rightbar'>
                         <div className='rail-head'>
-                            <button className='icon-btn tiny' title='Hide panel' onClick={toggle_rail}>
+                            <button className='icon-btn tiny' {...tip('Hide panel')} onClick={toggle_rail}>
                                 <Icon d={ICONS.chevron} size={16} />
                             </button>
                         </div>
+
+                        {current && (
+                            <section className='lyrics'>
+                                <h2 className='section-title'>Lyrics</h2>
+
+                                {timed ? (
+                                    <div className='lyric-lines' ref={lyric_box}>
+                                        {timed.map((line, i) => (
+                                            <button
+                                                key={`${line.at}-${i}`}
+                                                className={`lyric${
+                                                    i === line_now
+                                                        ? ' now'
+                                                        : Math.abs(i - line_now) === 1
+                                                          ? ' near'
+                                                          : ''
+                                                }${line.text ? '' : ' rest'}`}
+                                                {...tip('Jump to this line')}
+                                                onClick={() => seek_to(line.at)}
+                                            >
+                                                {line.text || '♪'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : sheet ? (
+                                    // plain lyrics carry no timing, so there is nothing to
+                                    // follow along with and nothing to click
+                                    <p className='lyric-plain'>{sheet}</p>
+                                ) : (
+                                    <p className='muted lyric-empty'>
+                                        {awaiting_lyrics
+                                            ? 'Looking for lyrics...'
+                                            : 'No lyrics for this track.'}
+                                    </p>
+                                )}
+                            </section>
+                        )}
 
                         {liked_songs.length > 0 && (
                             <section>
@@ -1526,14 +2011,14 @@ export default function App() {
                 )}
 
                 {!sidebar_open && (
-                    <button className='edge-toggle left' title='Show sidebar' onClick={toggle_sidebar}>
+                    <button className='edge-toggle left' {...tip('Show sidebar')} onClick={toggle_sidebar}>
                         <Icon d={ICONS.chevron} size={18} />
                     </button>
                 )}
 
                 {/* while cramped the rail has nowhere to go, so no handle is offered */}
                 {rail_hidden && !cramped && (
-                    <button className='edge-toggle right' title='Show panel' onClick={toggle_rail}>
+                    <button className='edge-toggle right' {...tip('Show panel')} onClick={toggle_rail}>
                         <Icon d={ICONS.back} size={18} />
                     </button>
                 )}
@@ -1668,6 +2153,34 @@ export default function App() {
                 </div>
             )}
 
+            {aura_menu && (
+                <div
+                    className='aura-menu'
+                    style={{ left: aura_menu.x, top: aura_menu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => e.preventDefault()}
+                >
+                    <div className='filter-label'>
+                        Cover tint
+                        <span>{aura}%</span>
+                    </div>
+                    <input
+                        className='slider'
+                        type='range'
+                        min={AURA_RANGE[0]}
+                        max={AURA_RANGE[1]}
+                        step={5}
+                        value={aura}
+                        aria-label='How much of the cover reaches the background'
+                        onChange={(e) => set_aura(Number(e.currentTarget.value))}
+                        // written once the drag ends rather than on every step
+                        onPointerUp={() => save_pref('aura', aura)}
+                        onKeyUp={() => save_pref('aura', aura)}
+                    />
+                    <p className='aura-hint'>How much of the artwork reaches the background.</p>
+                </div>
+            )}
+
             {library_menu && (
                 <div
                     className='filter-menu floating'
@@ -1765,7 +2278,7 @@ export default function App() {
                 <div className='controls'>
                     <button
                         className={`ctrl${shuffle_on ? ' on' : ''}`}
-                        title={shuffle_on ? 'Shuffle on' : 'Shuffle off'}
+                        {...tip(shuffle_on ? 'Turn shuffle off' : 'Shuffle')}
                         onClick={() => set_shuffle_on(!shuffle_on)}
                         disabled={!listed.length}
                     >
@@ -1773,7 +2286,7 @@ export default function App() {
                     </button>
                     <button
                         className='ctrl'
-                        title='Previous'
+                        {...tip('Previous')}
                         onClick={() => skip(-1)}
                         disabled={!queue.length}
                     >
@@ -1781,7 +2294,7 @@ export default function App() {
                     </button>
                     <button
                         className='ctrl play'
-                        title={paused ? 'Resume' : 'Pause'}
+                        {...tip(paused ? 'Resume' : 'Pause')}
                         onClick={toggle_pause}
                         disabled={!current}
                     >
@@ -1789,7 +2302,7 @@ export default function App() {
                     </button>
                     <button
                         className='ctrl'
-                        title='Next'
+                        {...tip('Next')}
                         onClick={() => skip(1)}
                         disabled={!queue.length}
                     >
@@ -1797,7 +2310,7 @@ export default function App() {
                     </button>
                     <button
                         className={`ctrl${looped ? ' on' : ''}`}
-                        title={looped ? 'Loop on' : 'Loop off'}
+                        {...tip(looped ? 'Stop repeating' : 'Repeat this track')}
                         onClick={toggle_loop}
                     >
                         <Icon d={ICONS.loop} size={17} />
@@ -1806,13 +2319,41 @@ export default function App() {
 
                 <div className='player-right'>
                     <button
-                        className='icon-btn tiny'
-                        title={`Theme: ${theme}`}
-                        onClick={() =>
-                            set_theme(
-                                theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system',
+                        className={`icon-btn tiny${aura_on ? ' on' : ''}`}
+                        {...tip(
+                            !aura_on
+                                ? 'Turn cover tint on'
+                                : current_cover
+                                  ? 'Turn cover tint off · right-click to adjust'
+                                  : 'Turn cover tint off',
+                        )}
+                        onClick={() => {
+                            set_aura_on(!aura_on)
+                            save_pref('aura_on', !aura_on)
+                        }}
+                        // the strength lives behind a right-click, the same place every
+                        // other secondary action in the app lives
+                        onContextMenu={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+
+                            // nothing to set the strength of while it is off, or while
+                            // there is no artwork on screen to tint with
+                            if (!aura_on || !current_cover) return
+
+                            const rect = e.currentTarget.getBoundingClientRect()
+
+                            set_aura_menu(
+                                aura_menu ? null : { x: rect.right, y: rect.top - 10 },
                             )
-                        }
+                        }}
+                    >
+                        <Icon d={ICONS.aura} size={15} />
+                    </button>
+                    <button
+                        className='icon-btn tiny'
+                        {...tip(`Switch to ${next_theme} theme`)}
+                        onClick={() => set_theme(next_theme)}
                     >
                         <Icon
                             d={
@@ -1828,6 +2369,17 @@ export default function App() {
                     {format_time(position)} / {format_time(length)}
                 </div>
             </div>
+
+            {active_tip && (
+                <div
+                    className={`tip${active_tip.below ? ' below' : ''}`}
+                    ref={tip_box}
+                    role='tooltip'
+                    style={{ left: active_tip.x, top: active_tip.y }}
+                >
+                    {active_tip.text}
+                </div>
+            )}
         </div>
     )
 }

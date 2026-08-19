@@ -1,101 +1,260 @@
-:root {
-    --bg: #ececec;
-    --card: #f4f4f4;
-    --card-strong: #ffffff;
-    --hover: #e6e6e6;
+/* ==========================================================================
+   yugen — the surface
 
+   Everything here is built on one idea: the glass has to have something to
+   refract. The cover of whatever is playing is blown up behind the whole
+   window, and every panel is a translucent sheet floating over it. The two
+   values that cover art contributes, --art-h and --art-s, are set on <html>
+   from App.tsx, and every accent in this file is mixed from them, so the app
+   takes its colour from the record rather than from a fixed palette.
+   ========================================================================== */
+
+:root {
+    color-scheme: light;
+
+    /* the artwork sets these two, and they colour the accents only: the glass
+       itself stays grey, so the one hue in the chrome is the one coming through
+       it from the cover behind. at 0% saturation a coverless library is exactly
+       as monochrome as a plain grey theme. */
+    --art-h: 0;
+    --art-s: 0%;
+
+    --void: #e9e9e9;
+    --scrim: 233 233 233;
     --text: #131313;
     --text-dim: #6e6e6e;
-    --border: #dedede;
-    --line: #e4e4e4;
 
-    --accent: #131313;
-    --accent-soft: #e2e2e2;
+    --accent: hsl(var(--art-h) calc(var(--art-s) * 0.75) 26%);
+    --accent-soft: hsl(var(--art-h) var(--art-s) 46% / 0.13);
+    --accent-glow: hsl(var(--art-h) var(--art-s) 45% / 0.24);
+
+    /* the sheets, ordered by how high they float */
+    --glass: hsl(0 0% 100% / 0.6);
+    --glass-raised: hsl(0 0% 100% / 0.84);
+    --glass-inset: hsl(0 0% 100% / 0.8);
+    --hover: hsl(0 0% 20% / 0.07);
+
+    --hairline: hsl(0 0% 25% / 0.13);
+    --line: hsl(0 0% 25% / 0.1);
+    /* the lit top edge that reads as thickness */
+    --specular: hsl(0 0% 100% / 0.75);
+
+    --shadow: 0 1.25rem 3rem -1rem hsl(0 0% 8% / 0.22);
+    --shadow-lift: 0 2rem 3.5rem -1rem hsl(0 0% 8% / 0.3);
+
     --danger: #c62828;
-    --shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-    --skeleton: #e0e0e0;
-    --search: #fbfbfb;
+    --skeleton: hsl(0 0% 30% / 0.12);
     --pin: #2f8f57;
-    --scroll: rgba(0, 0, 0, 0.24);
+    --scroll: hsl(0 0% 20% / 0.24);
+
+    --art-min: 0.16;
+    --art-max: 0.56;
 
     --gutter: 0.5rem;
     --search-h: 2.75rem;
+    --radius: 1.375rem;
+
+    /* Apple's sheet curve, and an overshoot for things that pop into place */
+    --spring: cubic-bezier(0.32, 0.72, 0, 1);
+    --pop: cubic-bezier(0.34, 1.5, 0.55, 1);
+    --fast: 0.15s;
+    --mid: 0.3s;
+    --slow: 0.55s;
+
+    --blur: saturate(190%) blur(28px);
 }
 
-/* no explicit choice: follow the system */
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme='light']) {
-        --bg: #131313;
-        --card: #1a1a1a;
-        --card-strong: #2a2a2a;
-        --hover: #262626;
+        color-scheme: dark;
 
+        --void: #0b0b0b;
+        --scrim: 11 11 11;
         --text: #ededed;
         --text-dim: #8c8c8c;
-        --border: #262626;
-        --line: #242424;
 
-        --accent: #ededed;
-        --accent-soft: #262626;
+        --accent: hsl(var(--art-h) calc(var(--art-s) * 0.8) 88%);
+        --accent-soft: hsl(var(--art-h) var(--art-s) 70% / 0.16);
+        --accent-glow: hsl(var(--art-h) var(--art-s) 55% / 0.3);
+
+        --glass: hsl(0 0% 11% / 0.52);
+        --glass-raised: hsl(0 0% 13% / 0.8);
+        --glass-inset: hsl(0 0% 90% / 0.1);
+        --hover: hsl(0 0% 90% / 0.07);
+
+        --hairline: hsl(0 0% 92% / 0.1);
+        --line: hsl(0 0% 92% / 0.075);
+        --specular: hsl(0 0% 100% / 0.14);
+
+        --shadow: 0 1.25rem 3rem -1rem hsl(0 0% 0% / 0.55);
+        --shadow-lift: 0 2rem 4rem -1rem hsl(0 0% 0% / 0.7);
+
         --danger: #ef5350;
-        --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-        --skeleton: #242424;
-        --search: #141414;
+        --skeleton: hsl(0 0% 85% / 0.09);
         --pin: #7bd88f;
-        --scroll: rgba(255, 255, 255, 0.22);
+        --scroll: hsl(0 0% 90% / 0.2);
+
+        --art-min: 0.2;
+        --art-max: 0.68;
     }
 }
 
 :root[data-theme='dark'] {
-    --bg: #131313;
-    --card: #1a1a1a;
-    --card-strong: #2a2a2a;
-    --hover: #262626;
+    color-scheme: dark;
 
+    --void: #0b0b0b;
+    --scrim: 11 11 11;
     --text: #ededed;
     --text-dim: #8c8c8c;
-    --border: #262626;
-    --line: #242424;
 
-    --accent: #ededed;
-    --accent-soft: #262626;
+    --accent: hsl(var(--art-h) calc(var(--art-s) * 0.8) 88%);
+    --accent-soft: hsl(var(--art-h) var(--art-s) 70% / 0.16);
+    --accent-glow: hsl(var(--art-h) var(--art-s) 55% / 0.3);
+
+    --glass: hsl(0 0% 11% / 0.52);
+    --glass-raised: hsl(0 0% 13% / 0.8);
+    --glass-inset: hsl(0 0% 90% / 0.1);
+    --hover: hsl(0 0% 90% / 0.07);
+
+    --hairline: hsl(0 0% 92% / 0.1);
+    --line: hsl(0 0% 92% / 0.075);
+    --specular: hsl(0 0% 100% / 0.14);
+
+    --shadow: 0 1.25rem 3rem -1rem hsl(0 0% 0% / 0.55);
+    --shadow-lift: 0 2rem 4rem -1rem hsl(0 0% 0% / 0.7);
+
     --danger: #ef5350;
-    --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-    --skeleton: #242424;
-    --search: #141414;
+    --skeleton: hsl(0 0% 85% / 0.09);
     --pin: #7bd88f;
-    --scroll: rgba(255, 255, 255, 0.22);
+    --scroll: hsl(0 0% 90% / 0.2);
+
+    --art-min: 0.2;
+    --art-max: 0.68;
 }
 
 button {
     outline: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- the artwork behind the glass ---------- */
+
+.ambient {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    background: var(--void);
+    /* the art is a backdrop, not an image: it never competes with the panels */
+    transition: background var(--slow) ease;
+}
+
+.ambient-art {
+    position: absolute;
+    /* blurring to the edge would let the window frame show through */
+    inset: -22%;
+    background-position: center;
+    background-size: cover;
+    filter: blur(5rem) saturate(1.7);
+    opacity: calc(var(--art-min) + var(--aura, 0.5) * (var(--art-max) - var(--art-min)));
+    will-change: transform, opacity;
+    animation:
+        art-in 0.9s ease-out forwards,
+        art-drift 48s ease-in-out infinite alternate;
+}
+
+/* the arriving layer covers this one on a track change, but when the tint is
+   switched off there is nothing to cover it, so it fades out on its own */
+.ambient-art.out {
+    animation:
+        art-out 0.9s ease-in forwards,
+        art-drift 48s ease-in-out infinite alternate;
+}
+
+@keyframes art-in {
+    from {
+        opacity: 0;
+    }
+}
+
+@keyframes art-out {
+    to {
+        opacity: 0;
+    }
+}
+
+/* the scrim hands the middle of the window back to the background, keeping the
+   colour as a glow around the edges. it thins out as --aura climbs, so the top
+   of the range is the artwork with nothing over it. */
+.ambient::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+        125% 100% at 50% 40%,
+        rgb(var(--scrim) / calc(0.9 - var(--aura, 0.5) * 0.86)) 0%,
+        rgb(var(--scrim) / calc(0.62 - var(--aura, 0.5) * 0.6)) 52%,
+        rgb(var(--scrim) / calc(0.24 - var(--aura, 0.5) * 0.24)) 100%
+    );
+    transition: background var(--mid) ease;
+}
+
+/* a slow parallax so the backdrop is never quite still */
+@keyframes art-drift {
+    from {
+        transform: scale(1.05) translate3d(-1.5%, -1%, 0);
+    }
+    to {
+        transform: scale(1.18) translate3d(1.5%, 1.5%, 0);
+    }
 }
 
 .shell {
+    position: relative;
+    z-index: 1;
     height: 100vh;
     padding: 0.75rem;
     display: flex;
     flex-direction: column;
-    gap: 0.875rem;
+    gap: 0.75rem;
     color: var(--text);
-    background: var(--bg);
     user-select: none;
 }
 
 /* ---------- surfaces ---------- */
 
+/* one recipe for every sheet: a tinted fill over a blur, a hairline edge, and a
+   lit top border. the specular line is what stops it reading as flat plastic. */
+.sidebar,
+.main,
+.rightbar,
 .player,
-.context-menu {
-    border: 1px solid var(--border);
-    background: var(--card);
-    box-shadow: var(--shadow);
+.context-menu,
+.filter-menu,
+.dialog,
+.search,
+.edge-toggle {
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+    border: 1px solid var(--hairline);
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        var(--shadow);
+}
+
+.context-menu,
+.filter-menu,
+.dialog,
+.player {
+    background: var(--glass-raised);
 }
 
 .section-title {
     margin: 0;
     font-size: 1.1875rem;
-    font-weight: 600;
-    letter-spacing: -0.02em;
+    font-weight: 650;
+    letter-spacing: -0.028em;
 }
 
 .muted {
@@ -116,7 +275,7 @@ button {
     min-height: 0;
     position: relative;
     display: grid;
-    /* the panels float on the app background instead of sharing one card */
+    /* the panels float on the artwork instead of sharing one card */
     gap: var(--gutter);
 }
 
@@ -124,10 +283,7 @@ button {
 .main,
 .rightbar {
     min-height: 0;
-    border: 1px solid var(--border);
-    border-radius: 0.875rem;
-    background: var(--card);
-    box-shadow: var(--shadow);
+    border-radius: var(--radius);
 }
 
 /* drag handles sitting on the column edges */
@@ -144,29 +300,54 @@ button {
 .resizer::after {
     content: '';
     position: absolute;
-    top: 1rem;
-    bottom: 1rem;
+    top: 2.5rem;
+    bottom: 2.5rem;
     left: 50%;
-    width: 1px;
-    transform: translateX(-50%);
-    background: var(--border);
+    width: 2px;
+    border-radius: 2px;
+    transform: translateX(-50%) scaleY(0.4);
+    background: var(--text-dim);
     opacity: 0;
-    transition: opacity 0.15s ease;
+    transition:
+        opacity var(--mid) var(--spring),
+        transform var(--mid) var(--spring);
 }
 
 .resizer:hover::after,
 .resizer.active::after {
-    opacity: 1;
+    opacity: 0.6;
+    transform: translateX(-50%) scaleY(1);
 }
 
 /* ---------- left sidebar ---------- */
 
 .sidebar {
+    position: relative;
     display: flex;
     flex-direction: column;
-    padding: 1.125rem 0.875rem;
-    gap: 0.25rem;
+    padding: 1.125rem 0.75rem;
+    gap: 0.1875rem;
     overflow-y: auto;
+}
+
+/* the one highlight that travels between rows, so switching views reads as a
+   single object moving rather than two boxes blinking */
+.nav-pill {
+    position: absolute;
+    top: 0;
+    left: 0.75rem;
+    right: 0.75rem;
+    z-index: 0;
+    border-radius: 0.875rem;
+    background: var(--glass-inset);
+    border: 1px solid var(--hairline);
+    box-shadow: inset 0 1px 0 var(--specular);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        transform var(--slow) var(--spring),
+        height var(--slow) var(--spring),
+        opacity var(--mid) ease;
 }
 
 .brand {
@@ -177,7 +358,7 @@ button {
     margin-bottom: 1.375rem;
     font-size: 1rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
 }
 
 .brand-mark {
@@ -191,6 +372,7 @@ button {
     width: 0.1875rem;
     border-radius: 0.125rem;
     background: var(--accent);
+    transition: background var(--slow) ease;
 }
 
 .brand-mark i:nth-child(1) { height: 60%; }
@@ -202,39 +384,55 @@ button {
     padding: 0 0.625rem;
     color: var(--text-dim);
     font-size: 0.6875rem;
-    font-weight: 500;
+    font-weight: 550;
+    letter-spacing: 0.01em;
 }
 
 .nav-item {
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     gap: 0.625rem;
     width: 100%;
     padding: 0.5625rem 0.625rem;
-    border: 1px solid transparent;
-    border-radius: 0.5625rem;
+    border: none;
+    border-radius: 0.875rem;
     background: none;
     color: var(--text);
     font: inherit;
     font-size: 0.8438rem;
     text-align: left;
     cursor: pointer;
-    transition: background 0.18s ease, border-color 0.18s ease;
+    transition:
+        background var(--fast) ease,
+        color var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .nav-item:hover:not(.active) {
     background: var(--hover);
 }
 
+.nav-item:active {
+    transform: scale(0.975);
+}
+
 .nav-item.active {
-    background: var(--card-strong);
-    border-color: var(--border);
     font-weight: 600;
+}
+
+.nav-item.active .ico {
+    color: var(--accent);
+    opacity: 1;
 }
 
 .nav-item .ico {
     flex: none;
-    opacity: 0.75;
+    opacity: 0.6;
+    transition:
+        opacity var(--fast) ease,
+        color var(--mid) ease;
 }
 
 .pinned {
@@ -263,24 +461,42 @@ button {
     gap: 0.5rem;
     width: 100%;
     padding: 0.6875rem;
-    border: none;
-    border-radius: 0.5625rem;
-    background: var(--accent-soft);
-    color: var(--accent);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    background: var(--glass-inset);
+    box-shadow: inset 0 1px 0 var(--specular);
+    color: var(--text);
     font: inherit;
     font-size: 0.8125rem;
     font-weight: 600;
     cursor: pointer;
-    transition: filter 0.18s ease;
+    transition:
+        transform var(--fast) var(--spring),
+        box-shadow var(--mid) ease,
+        opacity var(--fast) ease;
 }
 
 .pill-btn:hover:not(:disabled) {
-    filter: brightness(1.08);
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        0 0.5rem 1.25rem -0.5rem var(--accent-glow);
+}
+
+.pill-btn:active:not(:disabled) {
+    transform: scale(0.965);
 }
 
 .pill-btn:disabled {
-    opacity: 0.55;
+    opacity: 0.5;
     cursor: default;
+}
+
+.pill-btn .ico {
+    transition: transform var(--slow) var(--spring);
+}
+
+.pill-btn:disabled .ico {
+    animation: spin 1.1s linear infinite;
 }
 
 /* ---------- main ---------- */
@@ -315,24 +531,25 @@ button {
     right: 0;
     display: flex;
     flex-direction: column;
-    border: 1px solid var(--border);
-    border-radius: 0.875rem;
-    background: var(--search);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+    border-radius: 1.375rem;
     overflow: hidden;
     cursor: text;
     transition:
-        border-color 0.15s ease,
-        box-shadow 0.15s ease;
+        border-color var(--mid) ease,
+        box-shadow var(--mid) ease,
+        border-radius var(--mid) var(--spring);
 }
 
 .search:hover {
-    border-color: var(--text-dim);
+    border-color: hsl(0 0% 50% / 0.3);
 }
 
 .search.open {
-    border-color: var(--text-dim);
-    box-shadow: var(--shadow);
+    border-radius: 1.375rem;
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        var(--shadow-lift),
+        0 0 0 1px var(--accent-soft);
 }
 
 .search-row {
@@ -340,7 +557,7 @@ button {
     align-items: center;
     gap: 0.5625rem;
     height: calc(var(--search-h) - 2px);
-    padding: 0 1rem;
+    padding: 0 1.125rem;
 }
 
 .search-drop {
@@ -349,14 +566,14 @@ button {
     min-height: 0;
     border-top: 1px solid var(--line);
     transform-origin: top center;
-    animation: unfold 0.16s ease-out;
+    animation: unfold var(--mid) var(--spring);
 }
 
 /* it reads as the box growing downwards, not a card dropping in */
 @keyframes unfold {
     from {
-        opacity: 0.4;
-        transform: scaleY(0.55);
+        opacity: 0;
+        transform: scaleY(0.5);
     }
 }
 
@@ -370,11 +587,18 @@ button {
     background: none;
     color: var(--text-dim);
     cursor: pointer;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .search .clear:hover {
     background: var(--hover);
     color: var(--text);
+}
+
+.search .clear:active {
+    transform: scale(0.85);
 }
 
 .search .ico {
@@ -405,16 +629,23 @@ button {
     height: 2.25rem;
     flex: none;
     margin-left: auto;
-    border: 1px solid var(--border);
+    border: 1px solid var(--hairline);
     border-radius: 50%;
-    background: var(--card-strong);
+    background: var(--glass-inset);
+    box-shadow: inset 0 1px 0 var(--specular);
     color: var(--text);
     cursor: pointer;
-    transition: background 0.18s ease;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .icon-btn:hover {
     background: var(--hover);
+}
+
+.icon-btn:active {
+    transform: scale(0.9);
 }
 
 /* ---------- now playing ---------- */
@@ -424,14 +655,26 @@ button {
     grid-template-columns: 12.5rem 1fr;
     gap: 1.625rem;
     margin-bottom: 1.875rem;
+    animation: rise var(--slow) var(--spring) backwards;
+}
+
+@keyframes rise {
+    from {
+        opacity: 0;
+        transform: translateY(0.75rem);
+    }
 }
 
 .hero-cover {
     width: 12.5rem;
     height: 12.5rem;
-    border-radius: 0.625rem;
+    border-radius: 1.125rem;
     object-fit: cover;
-    box-shadow: var(--shadow);
+    /* the record lights the surface it sits on */
+    box-shadow:
+        0 1.5rem 3rem -1rem var(--accent-glow),
+        0 0.5rem 1.5rem -0.5rem hsl(0 0% 0% / 0.35);
+    transition: box-shadow var(--slow) ease;
 }
 
 .hero-cover.placeholder {
@@ -450,18 +693,20 @@ button {
 
 .now-body .label {
     margin-bottom: 0.375rem;
-    color: var(--text-dim);
+    color: var(--accent);
     font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
+    font-weight: 650;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
+    transition: color var(--slow) ease;
 }
 
 .now-body h1 {
     margin: 0 0 0.25rem;
-    font-size: 1.625rem;
-    font-weight: 600;
-    letter-spacing: -0.025em;
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.038em;
+    line-height: 1.1;
 }
 
 .now-body .sub {
@@ -478,7 +723,7 @@ button {
     padding-left: 0.625rem;
     color: var(--text-dim);
     font-size: 0.6875rem;
-    font-weight: 500;
+    font-weight: 550;
 }
 
 /* ---------- tracks ---------- */
@@ -494,13 +739,19 @@ button {
     align-items: center;
     gap: 0.75rem;
     padding: 0.4375rem 0.625rem;
-    border-radius: 0.5rem;
+    border-radius: 0.75rem;
     cursor: pointer;
-    transition: background 0.18s ease;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .track:hover {
     background: var(--hover);
+}
+
+.track:active {
+    transform: scale(0.99);
 }
 
 .track-index {
@@ -561,12 +812,15 @@ button {
     flex: none;
     padding: 0.25rem;
     border: none;
-    border-radius: 0.5rem;
+    border-radius: 0.625rem;
     background: none;
     color: var(--text-dim);
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.18s ease, color 0.18s ease;
+    transition:
+        opacity var(--fast) ease,
+        color var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .track:hover .heart,
@@ -578,6 +832,10 @@ button {
     color: var(--text);
 }
 
+.heart:active {
+    transform: scale(0.82);
+}
+
 /* liked wins over hover, so the state stays readable with the cursor on it */
 .heart.liked,
 .heart.liked:hover {
@@ -586,12 +844,11 @@ button {
 }
 
 .heart.liked .ico {
-    animation: pop 0.25s ease;
+    animation: pop 0.4s var(--pop);
 }
 
 @keyframes pop {
-    0% { transform: scale(0.6); }
-    60% { transform: scale(1.15); }
+    0% { transform: scale(0.4); }
     100% { transform: scale(1); }
 }
 
@@ -627,7 +884,7 @@ button {
 .card-row {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
-    gap: 1rem;
+    gap: 1.125rem;
 }
 
 .album {
@@ -640,19 +897,30 @@ button {
     font: inherit;
     text-align: left;
     cursor: pointer;
+    /* the grid deals itself out rather than appearing all at once */
+    animation: rise 0.5s var(--spring) backwards;
+    animation-delay: calc(var(--i, 0) * 24ms);
 }
 
 .album-cover {
     width: 100%;
     aspect-ratio: 1;
     margin-bottom: 0.5625rem;
-    border-radius: 0.5625rem;
+    border-radius: 0.875rem;
     object-fit: cover;
-    transition: transform 0.2s ease;
+    box-shadow: 0 0.5rem 1.25rem -0.75rem hsl(0 0% 0% / 0.5);
+    transition:
+        transform var(--mid) var(--spring),
+        box-shadow var(--mid) ease;
 }
 
 .album:hover .album-cover {
-    transform: translateY(-3px);
+    transform: translateY(-0.375rem) scale(1.025);
+    box-shadow: 0 1.25rem 2rem -0.75rem hsl(0 0% 0% / 0.5);
+}
+
+.album:active .album-cover {
+    transform: translateY(-0.125rem) scale(0.985);
 }
 
 .album-cover.round {
@@ -677,7 +945,10 @@ button {
     top: 0.5rem;
     right: 0.5rem;
     border-radius: 50%;
-    background: var(--card-strong);
+    background: var(--glass-raised);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    box-shadow: inset 0 1px 0 var(--specular);
 }
 
 .empty {
@@ -692,7 +963,7 @@ button {
     display: flex;
     flex-direction: column;
     gap: 1.25rem;
-    padding: 1.375rem 1rem;
+    padding: 1.375rem 0.875rem;
     overflow-y: auto;
 }
 
@@ -702,6 +973,7 @@ button {
 
 .rightbar .section-title {
     margin-bottom: 0.625rem;
+    padding-left: 0.5rem;
     font-size: 1rem;
 }
 
@@ -712,19 +984,24 @@ button {
     width: 100%;
     padding: 0.5rem;
     margin-bottom: 0.25rem;
-    border: 1px solid transparent;
-    border-radius: 0.625rem;
+    border: none;
+    border-radius: 0.875rem;
     background: none;
     color: inherit;
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 0.18s ease, border-color 0.18s ease;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .result:hover:not(:disabled) {
-    background: var(--card-strong);
-    border-color: var(--border);
+    background: var(--hover);
+}
+
+.result:active:not(:disabled) {
+    transform: scale(0.98);
 }
 
 .result:disabled {
@@ -736,7 +1013,7 @@ button {
     width: 2.625rem;
     height: 2.625rem;
     flex: none;
-    border-radius: 0.5rem;
+    border-radius: 0.625rem;
     object-fit: cover;
     /* keeps the box intact while a youtube thumbnail loads or fails */
     background: var(--skeleton);
@@ -806,7 +1083,7 @@ button {
 
 @keyframes shimmer {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.45; }
+    50% { opacity: 0.4; }
 }
 
 /* the section title is the first child, so the rows start at nth-child(2) */
@@ -825,13 +1102,23 @@ button {
     gap: 0.125rem;
     width: 13rem;
     padding: 0.375rem;
-    border-radius: 0.625rem;
+    border-radius: 1rem;
+    transform-origin: top left;
+    animation: menu-in 0.26s var(--spring);
+}
+
+/* it scales out of the point that was clicked */
+@keyframes menu-in {
+    from {
+        opacity: 0;
+        transform: scale(0.92);
+    }
 }
 
 .context-head {
     padding: 0.375rem 0.625rem 0.5rem;
     margin-bottom: 0.125rem;
-    border-bottom: 0.0625rem solid var(--line);
+    border-bottom: 1px solid var(--line);
     color: var(--text-dim);
     font-size: 0.6875rem;
 }
@@ -842,23 +1129,29 @@ button {
     gap: 0.625rem;
     padding: 0.5rem 0.625rem;
     border: none;
-    border-radius: 0.4375rem;
+    border-radius: 0.6875rem;
     background: none;
     color: var(--text);
     font: inherit;
     font-size: 0.8125rem;
     text-align: left;
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .context-menu button:hover {
     background: var(--hover);
 }
 
+.context-menu button:active {
+    transform: scale(0.97);
+}
+
 .context-menu button .ico {
     flex: none;
-    opacity: 0.75;
+    opacity: 0.7;
 }
 
 .context-menu .danger {
@@ -878,7 +1171,7 @@ button {
     gap: 1.25rem;
     flex: none;
     padding: 0.875rem 1.375rem;
-    border-radius: 1rem;
+    border-radius: var(--radius);
     overflow: hidden;
 }
 
@@ -887,7 +1180,7 @@ button {
     inset: 0 auto auto 0;
     width: 100%;
     /* the visible bar is thin, this keeps it comfortable to grab */
-    height: 0.75rem;
+    height: 0.875rem;
     cursor: pointer;
     touch-action: none;
 }
@@ -895,23 +1188,26 @@ button {
 .progress-track {
     height: 0.1875rem;
     background: var(--line);
-    transition: height 0.15s ease;
+    transition: height var(--mid) var(--spring);
 }
 
 .progress:hover .progress-track,
 .progress.dragging .progress-track {
-    height: 0.3125rem;
+    height: 0.375rem;
 }
 
 .progress span {
     display: block;
     height: 100%;
     background: var(--accent);
-    transition: width 0.3s linear;
+    box-shadow: 0 0 1rem var(--accent-glow);
+    transition:
+        width 0.3s linear,
+        background var(--slow) ease;
 }
 
 .progress.dragging span {
-    transition: none;
+    transition: background var(--slow) ease;
 }
 
 .playing-info {
@@ -927,9 +1223,11 @@ button {
     width: 2.625rem;
     height: 2.625rem;
     flex: none;
-    border-radius: 0.4375rem;
+    border-radius: 0.625rem;
     object-fit: cover;
     background: var(--skeleton);
+    box-shadow: 0 0.25rem 0.75rem -0.25rem var(--accent-glow);
+    transition: box-shadow var(--slow) ease;
 }
 
 .playing-info .placeholder {
@@ -954,16 +1252,23 @@ button {
     background: none;
     color: var(--text);
     cursor: pointer;
-    opacity: 0.7;
-    transition: opacity 0.18s ease, color 0.18s ease;
+    opacity: 0.65;
+    transition:
+        opacity var(--fast) ease,
+        color var(--mid) ease,
+        transform var(--fast) var(--spring);
 }
 
 .ctrl:hover:not(:disabled) {
     opacity: 1;
 }
 
+.ctrl:active:not(:disabled) {
+    transform: scale(0.86);
+}
+
 .ctrl:disabled {
-    opacity: 0.3;
+    opacity: 0.28;
     cursor: default;
 }
 
@@ -972,18 +1277,30 @@ button {
     opacity: 1;
 }
 
+/* the one solid control on the bar, so the eye lands on it first */
 .ctrl.play {
-    width: 2.5rem;
-    height: 2.5rem;
-    border: 1px solid var(--border);
+    width: 2.625rem;
+    height: 2.625rem;
+    border: 1px solid var(--hairline);
     border-radius: 50%;
-    background: var(--card-strong);
+    background: var(--glass-inset);
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        0 0.5rem 1.5rem -0.5rem var(--accent-glow);
     color: var(--accent);
     opacity: 1;
 }
 
+.ctrl.play:active:not(:disabled) {
+    transform: scale(0.92);
+}
+
 .ctrl.play:disabled {
     opacity: 0.4;
+}
+
+.ctrl.play .ico {
+    animation: pop 0.3s var(--pop);
 }
 
 .player-right {
@@ -1002,28 +1319,37 @@ button {
 
 .sidebar::-webkit-scrollbar,
 .main::-webkit-scrollbar,
-.rightbar::-webkit-scrollbar {
+.rightbar::-webkit-scrollbar,
+.search-body::-webkit-scrollbar,
+.context-menu.submenu::-webkit-scrollbar {
     width: 0.75rem;
 }
 
 .sidebar::-webkit-scrollbar-track,
 .main::-webkit-scrollbar-track,
-.rightbar::-webkit-scrollbar-track {
+.rightbar::-webkit-scrollbar-track,
+.search-body::-webkit-scrollbar-track,
+.context-menu.submenu::-webkit-scrollbar-track {
     background: none;
 }
 
 .sidebar::-webkit-scrollbar-thumb,
 .main::-webkit-scrollbar-thumb,
-.rightbar::-webkit-scrollbar-thumb {
-    border: 3px solid transparent;
-    border-radius: 0.5rem;
+.rightbar::-webkit-scrollbar-thumb,
+.search-body::-webkit-scrollbar-thumb,
+.context-menu.submenu::-webkit-scrollbar-thumb {
+    border: 4px solid transparent;
+    border-radius: 999px;
     background-color: transparent;
     background-clip: padding-box;
+    transition: background-color var(--mid) ease;
 }
 
 .sidebar:hover::-webkit-scrollbar-thumb,
 .main:hover::-webkit-scrollbar-thumb,
-.rightbar:hover::-webkit-scrollbar-thumb {
+.rightbar:hover::-webkit-scrollbar-thumb,
+.search-body:hover::-webkit-scrollbar-thumb,
+.context-menu.submenu:hover::-webkit-scrollbar-thumb {
     background-color: var(--scroll);
 }
 
@@ -1045,16 +1371,21 @@ button {
 }
 
 .icon-btn.tiny {
-    width: 1.375rem;
-    height: 1.375rem;
+    width: 1.5rem;
+    height: 1.5rem;
     border: none;
     background: none;
+    box-shadow: none;
     color: var(--text-dim);
 }
 
 .icon-btn.tiny:hover {
     background: var(--hover);
     color: var(--text);
+}
+
+.icon-btn.tiny.on {
+    color: var(--accent);
 }
 
 .nav-hint {
@@ -1071,7 +1402,7 @@ button {
 .context-sep {
     height: 1px;
     margin: 0.25rem 0.375rem;
-    background: var(--border);
+    background: var(--line);
 }
 
 /* ---------- dialog ---------- */
@@ -1082,7 +1413,14 @@ button {
     z-index: 30;
     display: grid;
     place-items: center;
-    background: rgb(0 0 0 / 0.42);
+    background: hsl(0 0% 4% / 0.44);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: fade var(--mid) ease;
+}
+
+@keyframes fade {
+    from { opacity: 0; }
 }
 
 .dialog {
@@ -1091,31 +1429,39 @@ button {
     gap: 0.875rem;
     width: min(22rem, 80vw);
     padding: 1.25rem;
-    border: 1px solid var(--border);
-    border-radius: 0.75rem;
-    background: var(--card);
-    box-shadow: var(--shadow);
+    border-radius: 1.25rem;
+    animation: sheet 0.42s var(--spring);
+}
+
+/* it comes up like an iOS sheet: from below, slightly small, and settles */
+@keyframes sheet {
+    from {
+        opacity: 0;
+        transform: translateY(1.5rem) scale(0.94);
+    }
 }
 
 .dialog h3 {
     margin: 0;
     font-size: 1rem;
-    font-weight: 600;
-    letter-spacing: -0.015em;
+    font-weight: 650;
+    letter-spacing: -0.022em;
 }
 
 .dialog input {
-    padding: 0.625rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    background: var(--card-strong);
+    padding: 0.6875rem 0.875rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.875rem;
+    background: var(--glass-inset);
     color: var(--text);
     font: inherit;
     outline: none;
+    user-select: text;
+    transition: box-shadow var(--fast) ease;
 }
 
 .dialog input:focus {
-    border-color: var(--text-dim);
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .dialog-actions {
@@ -1124,15 +1470,17 @@ button {
 }
 
 .pill-btn.primary {
-    background: var(--text);
-    color: var(--bg);
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--void);
+    box-shadow: 0 0.5rem 1.25rem -0.5rem var(--accent-glow);
 }
 
 /* ---------- add-to submenu ---------- */
 
 .context-menu .submenu-item .ico:last-child {
     margin-left: auto;
-    transition: transform 0.15s ease;
+    transition: transform var(--mid) var(--spring);
 }
 
 .context-menu .submenu-item.open .ico:last-child {
@@ -1155,14 +1503,13 @@ button {
     top: -0.375rem;
     max-height: 17rem;
     overflow-y: auto;
-    border: 1px solid var(--border);
-    background: var(--card);
-    box-shadow: var(--shadow);
+    transform-origin: top left;
 }
 
 .context-menu.submenu.flip {
     left: auto;
     right: 100%;
+    transform-origin: top right;
 }
 
 .context-menu.submenu button .ico:last-child {
@@ -1201,17 +1548,16 @@ button {
     gap: 0.125rem;
     width: 12rem;
     padding: 0.375rem;
-    border: 1px solid var(--border);
-    border-radius: 0.625rem;
-    background: var(--card);
-    box-shadow: var(--shadow);
+    border-radius: 1rem;
+    transform-origin: top right;
+    animation: menu-in 0.26s var(--spring);
 }
 
 .filter-label {
     padding: 0.375rem 0.625rem 0.25rem;
     color: var(--text-dim);
     font-size: 0.6875rem;
-    font-weight: 500;
+    font-weight: 550;
 }
 
 .filter-menu button {
@@ -1220,17 +1566,24 @@ button {
     gap: 0.625rem;
     padding: 0.4375rem 0.625rem;
     border: none;
-    border-radius: 0.4375rem;
+    border-radius: 0.6875rem;
     background: none;
     color: var(--text);
     font: inherit;
     font-size: 0.8125rem;
     text-align: left;
     cursor: pointer;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .filter-menu button:hover {
     background: var(--hover);
+}
+
+.filter-menu button:active {
+    transform: scale(0.97);
 }
 
 .filter-menu button .ico {
@@ -1253,22 +1606,30 @@ button {
     align-items: center;
     gap: 0.875rem;
     padding: 0.4375rem 0.625rem;
-    border-radius: 0.5625rem;
+    border-radius: 0.875rem;
     cursor: pointer;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .track-list .row:hover {
     background: var(--hover);
 }
 
+.track-list .row:active {
+    transform: scale(0.995);
+}
+
 .track-list .row.playing .name {
     color: var(--accent);
+    font-weight: 600;
 }
 
 .row-cover {
     width: 2.75rem;
     height: 2.75rem;
-    border-radius: 0.5rem;
+    border-radius: 0.625rem;
     object-fit: cover;
 }
 
@@ -1307,7 +1668,7 @@ button {
     width: 1.625rem;
     height: 1.625rem;
     flex: none;
-    border-radius: 0.3125rem;
+    border-radius: 0.4375rem;
     object-fit: cover;
 }
 
@@ -1317,6 +1678,8 @@ button {
 }
 
 .playlist-grid {
+    position: relative;
+    z-index: 1;
     display: grid;
     gap: 0.5rem;
     padding: 0.25rem 0.125rem 0;
@@ -1337,28 +1700,36 @@ button {
     min-width: 0;
     padding: 0.375rem;
     border: 1px solid transparent;
-    border-radius: 0.5625rem;
+    border-radius: 0.875rem;
     background: none;
     color: var(--text);
     font: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 0.18s ease, border-color 0.18s ease;
+    transition:
+        background var(--fast) ease,
+        border-color var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .tile:hover:not(.active) {
     background: var(--hover);
 }
 
+.tile:active {
+    transform: scale(0.95);
+}
+
 .tile.active {
-    border-color: var(--border);
-    background: var(--card-strong);
+    border-color: var(--hairline);
+    background: var(--glass-inset);
+    box-shadow: inset 0 1px 0 var(--specular);
 }
 
 .tile-cover {
     width: 100%;
     aspect-ratio: 1;
-    border-radius: 0.4375rem;
+    border-radius: 0.625rem;
     object-fit: cover;
 }
 
@@ -1382,11 +1753,15 @@ button {
 .brand .collapse {
     margin-left: auto;
     opacity: 0;
-    transition: opacity 0.15s ease;
+    transform: translateX(-0.25rem);
+    transition:
+        opacity var(--mid) ease,
+        transform var(--mid) var(--spring);
 }
 
 .sidebar:hover .brand .collapse {
     opacity: 1;
+    transform: none;
 }
 
 .rail-head {
@@ -1409,28 +1784,28 @@ button {
     width: 1.25rem;
     height: 4.5rem;
     transform: translateY(-50%);
-    border: 1px solid var(--border);
-    background: var(--card);
     color: var(--text-dim);
     cursor: pointer;
-    transition: color 0.15s ease, background 0.15s ease;
+    transition:
+        color var(--fast) ease,
+        width var(--mid) var(--spring);
 }
 
 .edge-toggle:hover {
-    background: var(--hover);
+    width: 1.625rem;
     color: var(--text);
 }
 
 .edge-toggle.left {
     left: 0;
     border-left: none;
-    border-radius: 0 0.5rem 0.5rem 0;
+    border-radius: 0 0.875rem 0.875rem 0;
 }
 
 .edge-toggle.right {
     right: 0;
     border-right: none;
-    border-radius: 0.5rem 0 0 0.5rem;
+    border-radius: 0.875rem 0 0 0.875rem;
 }
 
 /* ---------- search dropdown ---------- */
@@ -1443,24 +1818,34 @@ button {
 }
 
 .source-tabs button {
-    padding: 0.3125rem 0.75rem;
-    border: none;
+    padding: 0.3125rem 0.875rem;
+    border: 1px solid transparent;
     border-radius: 999px;
     background: none;
     color: var(--text-dim);
     font: inherit;
     font-size: 0.75rem;
-    font-weight: 500;
+    font-weight: 550;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition:
+        background var(--mid) var(--spring),
+        border-color var(--mid) ease,
+        color var(--fast) ease,
+        transform var(--fast) var(--spring);
 }
 
 .source-tabs button:hover {
     color: var(--text);
 }
 
+.source-tabs button:active {
+    transform: scale(0.94);
+}
+
 .source-tabs button.active {
-    background: var(--accent-soft);
+    background: var(--glass-inset);
+    border-color: var(--hairline);
+    box-shadow: inset 0 1px 0 var(--specular);
     color: var(--text);
 }
 
@@ -1470,9 +1855,291 @@ button {
     overflow-y: auto;
 }
 
+.search-body .result {
+    animation: rise 0.35s var(--spring) backwards;
+}
+
+.search-body .result:nth-child(2) { animation-delay: 30ms; }
+.search-body .result:nth-child(3) { animation-delay: 60ms; }
+.search-body .result:nth-child(4) { animation-delay: 90ms; }
+.search-body .result:nth-child(5) { animation-delay: 120ms; }
+.search-body .result:nth-child(n + 6) { animation-delay: 150ms; }
+
 .search-body .empty-row {
     margin: 0;
     padding: 1.125rem 0.625rem;
     text-align: center;
     font-size: 0.8125rem;
+}
+
+/* ---------- lyrics ---------- */
+
+.lyrics {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* its own scroller: the rail below it stays where the reader left it while the
+   song walks the sheet forward */
+.lyric-lines {
+    display: flex;
+    flex-direction: column;
+    max-height: min(28rem, 45vh);
+    padding: 0.5rem 0;
+    overflow-y: auto;
+    /* the ends of the list fade out rather than being cut by the panel edge */
+    -webkit-mask-image: linear-gradient(
+        to bottom,
+        transparent 0,
+        #000 2.5rem,
+        #000 calc(100% - 2.5rem),
+        transparent 100%
+    );
+    mask-image: linear-gradient(
+        to bottom,
+        transparent 0,
+        #000 2.5rem,
+        #000 calc(100% - 2.5rem),
+        transparent 100%
+    );
+    scrollbar-width: none;
+}
+
+.lyric-lines::-webkit-scrollbar {
+    width: 0;
+}
+
+.lyric {
+    padding: 0.3125rem 0.625rem;
+    border: none;
+    border-radius: 0.625rem;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.3;
+    text-align: left;
+    text-wrap: pretty;
+    cursor: pointer;
+    /* everything that is not the line in force sits back */
+    opacity: 0.26;
+    transform-origin: left center;
+    transition:
+        opacity var(--mid) ease,
+        color var(--mid) ease,
+        transform var(--mid) var(--spring),
+        background var(--fast) ease;
+}
+
+.lyric.near {
+    opacity: 0.45;
+}
+
+.lyric.now {
+    color: var(--accent);
+    opacity: 1;
+    transform: scale(1.035);
+}
+
+.lyric:hover {
+    background: var(--hover);
+    opacity: 0.75;
+}
+
+.lyric.now:hover {
+    opacity: 1;
+}
+
+/* an instrumental gap: the mark only means anything while it is the line in force */
+.lyric.rest {
+    color: var(--text-dim);
+    letter-spacing: 0.35em;
+}
+
+.lyric.rest:not(.now) {
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    font-size: 0;
+}
+
+.lyric-plain {
+    margin: 0.25rem 0 0;
+    max-height: min(28rem, 45vh);
+    overflow-y: auto;
+    padding-right: 0.375rem;
+    color: var(--text);
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    user-select: text;
+    scrollbar-width: none;
+}
+
+.lyric-plain::-webkit-scrollbar {
+    width: 0;
+}
+
+.lyric-empty {
+    margin: 0.25rem 0 0;
+    padding-left: 0.5rem;
+}
+
+/* ---------- cover tint ---------- */
+
+/* the player clips its overflow for the progress bar, so this one is anchored to
+   the viewport instead and opens upwards from the button */
+.aura-menu {
+    position: fixed;
+    z-index: 25;
+    transform: translate(-100%, -100%);
+    width: 15rem;
+    padding: 0.625rem 0.75rem 0.5rem;
+    border-radius: 1rem;
+    background: var(--glass-raised);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+    border: 1px solid var(--hairline);
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        var(--shadow);
+    transform-origin: bottom right;
+    animation: aura-in 0.26s var(--spring);
+}
+
+@keyframes aura-in {
+    from {
+        opacity: 0;
+        transform: translate(-100%, -100%) scale(0.92);
+    }
+}
+
+.aura-menu .filter-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0 0.4375rem;
+}
+
+.aura-menu .filter-label span {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.aura-hint {
+    margin: 0.5rem 0 0;
+    color: var(--text-dim);
+    font-size: 0.6875rem;
+    line-height: 1.45;
+}
+
+.slider {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    width: 100%;
+    height: 1rem;
+    margin: 0;
+    background: none;
+    cursor: pointer;
+}
+
+.slider::-webkit-slider-runnable-track {
+    height: 0.25rem;
+    border-radius: 999px;
+    background: var(--line);
+    overflow: hidden;
+}
+
+/* webkit gives no ::-webkit-slider-fill, so the filled half is a shadow the
+   thumb drags along behind itself, clipped by the track's overflow */
+.slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 0.875rem;
+    height: 0.875rem;
+    margin-top: -0.3125rem;
+    border: none;
+    border-radius: 50%;
+    background: var(--text);
+    box-shadow:
+        0 0.125rem 0.375rem hsl(0 0% 0% / 0.35),
+        -100vw 0 0 100vw var(--text);
+    transition: transform var(--fast) var(--spring);
+}
+
+.slider:active::-webkit-slider-thumb {
+    transform: scale(1.18);
+}
+
+/* ---------- tooltip ---------- */
+
+/* the same sheet as everything else, just small and dense. it sits above the
+   dialog layer because a control can be hovered while one is open. */
+.tip {
+    position: fixed;
+    z-index: 40;
+    max-width: 15rem;
+    padding: 0.3125rem 0.625rem;
+    border-radius: 0.625rem;
+    background: var(--glass-raised);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+    border: 1px solid var(--hairline);
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        var(--shadow);
+    color: var(--text);
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.35;
+    letter-spacing: -0.006em;
+    pointer-events: none;
+    /* the y in the style attribute is already the edge it should touch */
+    transform: translate(-50%, -100%);
+    transform-origin: bottom center;
+    animation: tip-in 0.2s var(--spring);
+}
+
+.tip.below {
+    transform: translate(-50%, 0);
+    transform-origin: top center;
+}
+
+/* it grows out of the control rather than fading in on top of it */
+@keyframes tip-in {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -100%) translateY(0.25rem) scale(0.92);
+    }
+}
+
+.tip.below {
+    animation-name: tip-in-below;
+}
+
+@keyframes tip-in-below {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 0) translateY(-0.25rem) scale(0.92);
+    }
+}
+
+/* ---------- motion, opted out ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+    }
+
+    .ambient-art {
+        animation: none;
+    }
 }

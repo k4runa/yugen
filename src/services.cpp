@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <nlohmann/json.hpp>
+#include <curl/curl.h>
 
 #include "miniaudio.h"
 #include "taglib.h"
@@ -433,5 +434,62 @@ namespace yugen
                + output_path + "/%(title)s [%(id)s].%(ext)s\" \"" + url + "\"";
           std::system(cmd.c_str());
           return "done";
+     }
+
+     std::size_t Core::write_callback(void* contents, std::size_t size, std::size_t nmemb, std::string* output)
+     {
+          output->append((char*)contents, size * nmemb);
+          return size * nmemb;
+     }
+
+     std::string Core::fetch_url(const std::string &url)
+     {
+          CURL* curl = curl_easy_init();
+          if(!curl) return "";
+
+          std::string response;
+          curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+          curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+          curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+          curl_easy_setopt(curl, CURLOPT_USERAGENT, "yugen/1.0");
+          curl_easy_perform(curl);
+          curl_easy_cleanup(curl);
+
+          return response;
+     }
+
+     std::string Core::get_lyrics(const std::string &title, const std::string &artist)
+     {
+          CURL* curl = curl_easy_init();
+          if(!curl) return "";
+          char* enc_title = curl_easy_escape(curl, title.c_str(), 0);
+          char* enc_artist = curl_easy_escape(curl, artist.c_str(), 0);
+
+          std::string url = "https://lrclib.net/api/search?track_name=";
+
+          if(enc_title) url += enc_title;
+          url += "&artist_name=";
+          if(enc_artist) url += enc_artist;
+
+          curl_free(enc_title);
+          curl_free(enc_artist);
+          curl_easy_cleanup(curl);          
+          
+          std::string response = fetch_url(url);
+          if(response.empty()) return "";
+
+          auto data = json::parse(response, nullptr, false);
+          if(data.is_discarded() || data.empty()) return "";
+
+          auto& first = data[0];
+          if(first.contains("syncedLyrics") && !first["syncedLyrics"].is_null()) {
+               return first["syncedLyrics"].get<std::string>();
+          }
+          
+          if(first.contains("plainLyrics") && !first["plainLyrics"].is_null()) {
+               return first["plainLyrics"].get<std::string>();
+          }
+
+          return "";
      }
 }
