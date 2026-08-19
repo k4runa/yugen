@@ -564,9 +564,9 @@ namespace yugen
 
      /*
       * MusicManager - playlists.json and liked_songs.json.
+      * The whole playlists file, or an empty object if it is missing or unreadable,
+      * so a first run behaves like an empty library instead of an error
       */
-     // The whole playlists file, or an empty object if it is missing or unreadable,
-     // so a first run behaves like an empty library instead of an error.
      json MusicManager::load_playlists()
      {
           const std::string path = data_dir() + PLAYLISTS_FILE;
