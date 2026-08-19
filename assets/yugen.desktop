@@ -1,8 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=yugen
-GenericName=Music Player
-Comment=Play, search and download music
+Name=Yugen
+Comment=Music Player
 Exec=yugen
 Icon=yugen
 Terminal=false
