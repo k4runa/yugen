@@ -1,0 +1,25 @@
+pkgbase = yugen-git
+	pkgdesc = A desktop music player with YouTube/SoundCloud search, lyrics, and Discord Rich Presence
+	pkgver = r25.466e6d4
+	pkgrel = 1
+	url = https://github.com/k4runa/yugen
+	arch = x86_64
+	license = MIT
+	makedepends = cmake
+	makedepends = ninja
+	makedepends = npm
+	makedepends = git
+	depends = webkitgtk-6.0
+	depends = gtk4
+	depends = libadwaita
+	depends = taglib
+	depends = curl
+	depends = yt-dlp
+	depends = ffmpeg
+	depends = hicolor-icon-theme
+	provides = yugen
+	conflicts = yugen
+	source = yugen-git::git+https://github.com/k4runa/yugen.git
+	sha256sums = SKIP
+
+pkgname = yugen-git
