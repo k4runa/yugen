@@ -1,62 +1,34 @@
 # yugen
 
-A desktop music player for Linux. The backend is C++ ([saucer](https://github.com/saucer/saucer) webview + [miniaudio](https://miniaud.io) for playback), the interface is React + TypeScript rendered inside that webview.
+A desktop music player for Linux. Plays local mp3 files, searches and downloads
+tracks from YouTube and SoundCloud through `yt-dlp`, keeps playlists and liked
+songs, shows synced lyrics from [lrclib](https://lrclib.net), and tints itself
+with the cover art of whatever is playing.
 
-## Features
-
-- Plays local mp3 files from a folder, with metadata and embedded cover art read via TagLib
-- Search and download tracks from YouTube and SoundCloud (through `yt-dlp`)
-- Playlists: create, rename, delete, add/remove tracks
-- Liked songs
-- Queue with next/prev, shuffle, loop and seeking
-- Lyrics from [lrclib](https://lrclib.net) — a synced sheet follows the track line by line and any line can be clicked to seek there, an unsynced one is shown as plain text
-- The cover of the playing track colours the interface: its dominant hue drives every accent, and the artwork itself sits behind the app at an adjustable strength
-- Custom window chrome — native decorations, the WebKit context menu and its tooltips are all off, and the menus and tooltips are drawn in the UI instead
-
-## Requirements
-
-- CMake 3.10+, a C++23 compiler, `pkg-config`
-- `taglib` and `libcurl` (dev packages)
-- The [saucer](https://github.com/saucer/saucer) system dependencies (WebKitGTK on Linux)
-- `yt-dlp` and `ffmpeg` on `PATH` — needed for search and downloads
-- Node.js for the UI
-
-`saucer`, `saucer/embed`, `nlohmann/json` and the Discord RPC library are pulled in automatically by CMake's `FetchContent`.
-
-Discord rich presence needs no login or token — the running Discord client is talked to over its local socket. It shows the track as a *Listening* activity with a progress bar, and the cover comes from the YouTube thumbnail for downloaded tracks or from an iTunes lookup otherwise, cached in `~/.config/yugen/covers.json`.
+The backend is C++ — [saucer](https://github.com/saucer/saucer) for the webview,
+[miniaudio](https://miniaud.io) for playback, TagLib for metadata. The interface
+is React + TypeScript, built into a bundle that is baked straight into the
+executable, so the binary is all there is to run.
 
 ## Building
 
-The UI is baked into the executable, so it has to be built first:
+Needs CMake 3.10+, a C++23 compiler, `pkg-config`, Node.js, the dev packages for
+`taglib` and `libcurl`, WebKitGTK, and `yt-dlp` + `ffmpeg` on `PATH`. Everything
+else is fetched by CMake.
+
+The UI has to be built first — CMake embeds `ui/dist` when it configures and
+will not build without it:
 
 ```sh
 cd ui
 npm install
 npm run build
-```
+cd ..
 
-then:
-
-```sh
 cmake -B build -G Ninja && cmake --build build
 ```
 
-CMake picks up `ui/dist` when it configures and refuses to build without it. Re-running the build re-embeds whatever is in `ui/dist` at that point, so after changing the UI it is `npm run build` and then `cmake --build build`.
-
-## Installing
-
-```sh
-sudo cmake --install build
-```
-
-That is the binary into `/usr/local/bin`, the desktop entry into `/usr/local/share/applications` and the icons into `/usr/local/share/icons/hicolor`, so yugen shows up in the application menu. If the icon does not appear right away:
-
-```sh
-sudo gtk-update-icon-cache /usr/local/share/icons/hicolor
-sudo update-desktop-database /usr/local/share/applications
-```
-
-Only yugen's own files are installed — the fetched dependencies are declared `EXCLUDE_FROM_ALL`, so their headers and CMake config stay out of the prefix.
+After changing the UI, re-run `npm run build` and then `cmake --build build`.
 
 ## Running
 
@@ -64,30 +36,15 @@ Only yugen's own files are installed — the fetched dependencies are declared `
 ./build/yugen
 ```
 
-Nothing else has to be running: the interface is served out of the binary itself.
+Or install it system-wide, which also drops in the desktop entry and icons:
 
-While working on the UI the dev server is still the faster loop — `cd ui && npm run dev`, and point `UI_ENTRY` in `src/main.cpp` at `http://localhost:5173/` through `set_url` instead of `serve`.
-
-## Layout
-
-```
-src/main.cpp       saucer window, and every function exposed to the UI
-src/services.cpp   Core / SoundManager / MusicManager
-include/services.h
-ui/src/App.tsx     the whole interface
+```sh
+sudo cmake --install build
 ```
 
-The three service classes split up as: `Core` handles search, downloads and cover extraction, `SoundManager` handles playback and the queue, `MusicManager` handles playlists and liked songs.
+The music folder is hardcoded in `ui/src/App.tsx` as `FILE_PATH` — point it at
+your own library. Playlists and liked songs live in `~/.config/yugen/`.
 
-## Data
+## License
 
-Playlists and liked songs are stored as JSON under `~/.config/yugen/`:
-
-- `playlists.json`
-- `liked_songs.json`
-
-Similar UI preferences go into `localStorage`, such as window layout, pinned playlists, cover tint, etc.. (WebKit keeps it under `~/.local/share/yugen`).
-
-## Note
-
-The music folder is currently hardcoded in `ui/src/App.tsx` as `FILE_PATH`. Change it there to point at your own library.
+[LICENSE](LICENSE) — MIT
