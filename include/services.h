@@ -107,30 +107,34 @@ namespace yugen
       *
       * It also holds the shuffled queue next_song()/prev_song() walk over, and
       * reads the id3 tags off the files for the ui.
-      */     class SoundManager
+      */     
+     class SoundManager
      {
           public:
                // playback
                static void play(ma_engine* engine, const std::string& file_path,
                     const std::string& title = "", const std::string& artist = "", const std::string& album = "");
-               static void resume();
-               static void stop();
                static void seek(float position);
                static void toggle_loop();
+               static void resume();
+               static void stop();
 
                // queue
                static std::string next_song();
                static std::string prev_song();
 
                // state
-               static bool is_playing();
                static bool is_finished();
+               static bool is_playing();
                static float get_pos();
                static float get_len();
 
+               static void set_volume(float volume);
+               static float load_volume();
+
                // files
-               static std::vector<std::string> fetch_songs(const std::string& file_path);
                static std::vector<std::string> get_metadata(const std::string& file_path);
+               static std::vector<std::string> fetch_songs(const std::string& file_path);
                static void delete_song(const std::string& file_path);
      };
 
@@ -140,17 +144,19 @@ namespace yugen
       * data_dir(). Every call reads the whole file, edits the json in memory and
       * writes it back - the files are small enough that nothing is cached, which
       * keeps them correct if something else edits them between calls.
-      */     class MusicManager
+      */     
+     class MusicManager
      {
           public:
                // playlists
-               static std::vector<std::string> get_playlists();
+               static bool rename_playlist(const std::string& playlist_name, const std::string& new_playlist_name);
+               static bool remove_from_playlist(const std::string& playlist_name, const std::string& file_path);
+               static bool add_to_playlist(const std::string& playlist_name, const std::string& file_path);
                static std::vector<std::string> get_playlist(const std::string& playlist_name);
                static bool create_playlist(const std::string& playlist_name);
                static bool delete_playlist(const std::string& playlist_name);
-               static bool rename_playlist(const std::string& playlist_name, const std::string& new_playlist_name);
-               static bool add_to_playlist(const std::string& playlist_name, const std::string& file_path);
-               static bool remove_from_playlist(const std::string& playlist_name, const std::string& file_path);
+               
+               static std::vector<std::string> get_playlists();
 
                // liked songs
                static std::vector<std::string> get_liked_songs();
@@ -161,7 +167,7 @@ namespace yugen
                static std::vector<std::string> shuffle_songs(const std::vector<std::string>& songs);
 
           private:
-               static json load_playlists();
                static bool save_playlists(const json& data);
+               static json load_playlists();
      };
 }

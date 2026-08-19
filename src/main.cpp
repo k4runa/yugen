@@ -311,8 +311,16 @@ coco::stray start(saucer::application* app)
           std::println("[INFO] Share activity on discord: {}", state);
      });
 
+     webview->expose("set_volume", [](float vol) {
+          sm::set_volume(vol);
+     });
+
      webview->expose("get_activity", [] {
           return yugen::get_activity();
+     });
+
+     webview->expose("load_volume", [] {
+          return sm::load_volume();
      });
 
      /*

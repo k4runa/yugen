@@ -181,6 +181,8 @@ type Bridge = {
     rename_playlist(playlist: string, renamed: string): Promise<boolean>
     add_to_playlist(playlist: string, name: string): Promise<boolean>
     remove_from_playlist(playlist: string, name: string): Promise<boolean>
+    set_volume(volume: number) : Promise<void>
+    load_volume() : Promise<number>
 }
 
 declare global {
@@ -518,6 +520,10 @@ function Heart({ liked, on_toggle, size = 15, className = '' }: HeartProps) {
 }
 
 const ICONS = {
+    // the cone is shared, the arcs to its right are what the level changes
+    volume_mute: 'M4 9.5h3L11 6v12l-4-3.5H4zM15.5 10l4 4m0-4-4 4',
+    volume_low: 'M4 9.5h3L11 6v12l-4-3.5H4zM14.5 10a3 3 0 0 1 0 4',
+    volume_high: 'M4 9.5h3L11 6v12l-4-3.5H4zM14.5 10a3 3 0 0 1 0 4M17 7.5a7 7 0 0 1 0 9',
     library: 'M4 20V9m4 11V4m4 16v-7m4 7V7m4 13v-4',
     heart: 'M19.5 12.6 12 20l-7.5-7.4a4.6 4.6 0 0 1 0-6.5 4.6 4.6 0 0 1 6.5 0l1 1 1-1a4.6 4.6 0 0 1 6.5 0 4.6 4.6 0 0 1 0 6.5',
     album: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2',
@@ -561,6 +567,11 @@ export default function App() {
     const [share_dc, set_share_dc] = useState(() => stored_flag('share_dc', true))
     const [view, set_view] = useState<View>('library')
     const [selection, set_selection] = useState<string | null>(null)
+
+    const [volume, set_volume_state] = useState(1)
+    // what unmuting goes back to, so the level survives a trip through zero
+    const [prev_volume, set_prev_volume] = useState(1)
+    const [volume_menu, set_volume_menu] = useState<{ x: number; y: number } | null>(null)
 
     const [songs, set_songs] = useState<string[]>([])
     const [metadata_map, set_metadata_map] = useState<Record<string, string[]>>({})
@@ -649,6 +660,23 @@ export default function App() {
     useEffect(() => {
         document.documentElement.style.setProperty('--aura', `${aura / 100}`)
     }, [aura])
+
+    useEffect(() => {
+        if (!volume_menu) return
+
+        const close = () => set_volume_menu(null)
+        const on_key = (e: KeyboardEvent) => e.key === 'Escape' && close()
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+        window.addEventListener('keydown', on_key)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+            window.removeEventListener('keydown', on_key)
+        }
+    }, [volume_menu])
 
     useEffect(() => {
         if (!aura_menu) return
@@ -814,6 +842,13 @@ export default function App() {
     useEffect(() => {
         bridge().set_activity(share_dc)
         // eslint-disable-next-line react-hooks/exhaustive-deps -- the stored value, once
+    }, [])
+
+    useEffect(() => {
+        bridge().load_volume().then((v) => {
+            set_volume_state(v)
+            if (v > 0) set_prev_volume(v)
+        })
     }, [])
 
     // kept in a ref so the poller below never has to be torn down and rebuilt
@@ -1291,6 +1326,12 @@ export default function App() {
             drag.latest = clamp(raw, RAIL_RANGE)
             set_rail_w(drag.latest)
         }
+    }
+
+    const change_volume = (v: number) => {
+        const clamped = Math.max(0, Math.min(1, v))
+        set_volume_state(clamped)
+        bridge().set_volume(clamped)
     }
 
     function end_resize(e: React.PointerEvent<HTMLDivElement>) {
@@ -2238,6 +2279,35 @@ export default function App() {
                 </div>
             )}
 
+            {volume_menu && (
+                <div
+                    className='aura-menu'
+                    style={{ left: volume_menu.x, top: volume_menu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => e.preventDefault()}
+                >
+                    <div className='filter-label'>
+                        Volume
+                        <span>{Math.round(volume * 100)}%</span>
+                    </div>
+                    <input
+                        className='slider'
+                        type='range'
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={volume}
+                        aria-label='Volume'
+                        onChange={(e) => {
+                            const v = Number(e.currentTarget.value)
+
+                            if (v > 0) set_prev_volume(v)
+                            change_volume(v)
+                        }}
+                    />
+                </div>
+            )}
+
             {library_menu && (
                 <div
                     className='filter-menu floating'
@@ -2372,6 +2442,47 @@ export default function App() {
 
                 <div className='player-right'>
                     <button
+                        className={`icon-btn tiny${volume === 0 ? '' : ' on'}`}
+                        {...tip(
+                            volume === 0
+                                ? 'Volume · right-click to unmute'
+                                : 'Volume · right-click to mute',
+                        )}
+                        onClick={(e) => {
+                            // the window listener that dismisses the menu goes up
+                            // the moment it opens, so this click must not reach it
+                            e.stopPropagation()
+
+                            const rect = e.currentTarget.getBoundingClientRect()
+
+                            set_volume_menu(
+                                volume_menu ? null : { x: rect.right, y: rect.top - 10 },
+                            )
+                        }}
+                        onContextMenu={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+
+                            if (volume === 0) {
+                                change_volume(prev_volume > 0 ? prev_volume : 0.5)
+                            } else {
+                                set_prev_volume(volume)
+                                change_volume(0)
+                            }
+                        }}
+                    >
+                        <Icon
+                            d={
+                                volume === 0
+                                    ? ICONS.volume_mute
+                                    : volume < 0.5
+                                      ? ICONS.volume_low
+                                      : ICONS.volume_high
+                            }
+                            size={15}
+                        />
+                    </button>
+                    <button
                         className={`icon-btn tiny${share_dc ? ' on' : ''}`}
                         {...tip(
                             share_dc
@@ -2390,6 +2501,7 @@ export default function App() {
                     >
                         <Icon d={ICONS.discord} size={15} />
                     </button>
+                    
                     <button
                         className={`icon-btn tiny${aura_on ? ' on' : ''}`}
                         {...tip(

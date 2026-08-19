@@ -540,6 +540,28 @@ namespace yugen
           fs::remove(file_path);
      }
 
+     void SoundManager::set_volume(float volume)
+     {
+          if(sound_initialized) ma_sound_set_volume(&sound, volume);
+
+          std::ofstream out(data_dir() + "/vol.txt");
+          out << volume;
+     }
+
+     float SoundManager::load_volume()
+     {
+          std::string path = data_dir() + "/vol.txt";
+          if(fs::exists(path))
+          {
+               std::ifstream f(path);
+               float vol;
+               f >> vol;
+               return vol;
+          }
+
+          return 1.0f;
+     }
+
      /*
       * MusicManager - playlists.json and liked_songs.json.
       */
