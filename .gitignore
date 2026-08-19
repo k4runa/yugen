@@ -11,11 +11,12 @@ heaptrack.*.zst
 # vendored discord social sdk (downloaded, not part of the source tree)
 discord_social_sdk/
 
-# makepkg working dirs. note that $srcdir is ./src, which is also where the
-# c++ sources live - run makepkg from its own directory, not from here
-pkg/
-src/yugen-git/
-yugen-git/
+# makepkg works out of $startdir, and at the repo root its $srcdir would be
+# ./src - where the c++ sources live. that is why the pkgbuild sits in a
+# directory of its own, and these are what it leaves behind there.
+packaging/aur/src/
+packaging/aur/pkg/
+packaging/aur/*.tar.gz
 
 # appimage build output, and the tool that produces it
 AppDir/

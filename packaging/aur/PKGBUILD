@@ -1,7 +1,7 @@
 # Maintainer: Enes Selber <enes.s3lber@gmail.com>
 
-pkgname=yugen-git
-pkgver=r25.466e6d4
+pkgname=yugen
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="A desktop music player with YouTube/SoundCloud search, lyrics, and Discord Rich Presence"
 arch=('x86_64')
@@ -19,24 +19,17 @@ depends=('webkitgtk-6.0'
          'ffmpeg'
          'hicolor-icon-theme')
 makedepends=('cmake' 'ninja' 'npm' 'git')
-provides=('yugen')
-conflicts=('yugen')
-source=("$pkgname::git+https://github.com/k4runa/yugen.git")
-sha256sums=('SKIP')
-
-pkgver() {
-    cd "$srcdir/$pkgname"
-    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
-}
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('4a4f16fb75ecf7915cb49a5b002b46a7fc0cfa5f7df9d764bfa8c420b090fabf')
 
 build() {
     # the ui bundle has to exist before cmake configures: saucer_embed() globs
     # ui/dist at configure time and bakes it into the executable
-    cd "$srcdir/$pkgname/ui"
+    cd "$srcdir/$pkgname-$pkgver/ui"
     npm ci
     npm run build
 
-    cd "$srcdir/$pkgname"
+    cd "$srcdir/$pkgname-$pkgver"
     # the default prefix is /usr/local, which is not where a package belongs
     cmake -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -45,7 +38,7 @@ build() {
 }
 
 package() {
-    cd "$srcdir/$pkgname"
+    cd "$srcdir/$pkgname-$pkgver"
 
     # CMakeLists already installs the binary, the desktop entry and all six
     # icon sizes into the right places, so there is nothing to repeat here
