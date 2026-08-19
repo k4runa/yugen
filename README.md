@@ -10,6 +10,18 @@ The backend is C++ — [saucer](https://github.com/saucer/saucer) for the webvie
 is React + TypeScript, built into a bundle that is baked straight into the
 executable, so the binary is all there is to run.
 
+## Download
+
+A prebuilt AppImage is on the [releases page](https://github.com/k4runa/yugen/releases):
+
+```sh
+wget https://github.com/k4runa/yugen/releases/download/v1.0.0/Yugen-x86_64.AppImage
+chmod +x Yugen-x86_64.AppImage
+./Yugen-x86_64.AppImage
+```
+
+It still needs `yt-dlp` and `ffmpeg` on `PATH` for search and downloads.
+
 ## Building
 
 Needs CMake 3.10+, a C++23 compiler, `pkg-config`, Node.js, the dev packages for
