@@ -155,10 +155,6 @@ type Bridge = {
     is_finished(): Promise<boolean>
     seek(position: number): Promise<void>
     delete_song(path: string): Promise<void>
-    window_close(): Promise<void>
-    window_minimize(): Promise<void>
-    window_zoom(): Promise<void>
-    window_drag(): Promise<void>
     get_liked_songs(): Promise<string[]>
     like_song(name: string): Promise<void>
     unlike_song(name: string): Promise<void>
@@ -648,7 +644,7 @@ export default function App() {
     }
 
     async function toggle_loop() {
-        await bridge().toggle_loop(looped)
+        await bridge().toggle_loop(!looped)
         set_looped(!looped)
     }
 
@@ -1209,15 +1205,10 @@ export default function App() {
                 )}
 
                 <main className='main'>
-                    <div
-                        className='topbar'
-                        onPointerDown={() => bridge().window_drag()}
-                        onDoubleClick={() => bridge().window_zoom()}
-                    >
+                    <div className='topbar'>
                         <div className='search-slot'>
                             <label
                                 className={`search${search_open ? ' open' : ''}`}
-                                onPointerDown={(e) => e.stopPropagation()}
                                 onClick={(e) => {
                                     e.stopPropagation()
                                     set_search_open(true)
