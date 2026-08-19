@@ -33,12 +33,24 @@ FetchContent_Declare(
 )
 
 FetchContent_Declare(
+    saucer-embed
+    GIT_REPOSITORY "https://github.com/saucer/embed"
+    GIT_TAG v1.1.1
+)
+
+FetchContent_Declare(
     discord-presence
     GIT_REPOSITORY "https://github.com/onegen-dev/discord-presence.git"
     GIT_TAG 3b50b0854ec24f9b2d4cc8e28f9145f276bb998e
 )
 
-FetchContent_MakeAvailable(saucer json discord-presence)
+FetchContent_MakeAvailable(saucer json saucer-embed discord-presence)
+
+# The built ui is baked into the executable, so there is nothing to serve at
+# runtime and nothing to install next to the binary. The directory is globbed
+# when cmake configures, so `npm run build` in ui/ has to have run at least
+# once; after that the generated sources are refreshed on every build.
+set(YUGEN_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ui/dist")
 
 # The executable itself.
 add_executable(${PROJECT_NAME}
@@ -56,8 +68,20 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     -Wextra
 )
 
+if (NOT EXISTS "${YUGEN_UI_DIR}/index.html")
+    message(FATAL_ERROR
+        "No ui bundle at ${YUGEN_UI_DIR} - run `npm run build` in ui/ first.")
+endif()
+
+saucer_embed("${YUGEN_UI_DIR}"
+    NAME        ui
+    TARGET      ${PROJECT_NAME}
+    DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/embedded"
+)
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     nlohmann_json::nlohmann_json
+    saucer::ui
     ${TAGLIB_LIBRARIES}
     saucer::saucer
     CURL::libcurl

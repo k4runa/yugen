@@ -15,40 +15,43 @@ A desktop music player for Linux. The backend is C++ ([saucer](https://github.co
 
 ## Requirements
 
-- CMake 3.10+, a C++20 compiler, `pkg-config`
+- CMake 3.10+, a C++23 compiler, `pkg-config`
 - `taglib` and `libcurl` (dev packages)
 - The [saucer](https://github.com/saucer/saucer) system dependencies (WebKitGTK on Linux)
 - `yt-dlp` and `ffmpeg` on `PATH` — needed for search and downloads
 - Node.js for the UI
 
-`saucer` and `nlohmann/json` are pulled in automatically by CMake's `FetchContent`.
+`saucer`, `saucer/embed`, `nlohmann/json` and the Discord RPC library are pulled in automatically by CMake's `FetchContent`.
+
+Discord rich presence needs no login or token — the running Discord client is talked to over its local socket. It shows the track as a *Listening* activity with a progress bar, and the cover comes from the YouTube thumbnail for downloaded tracks or from an iTunes lookup otherwise, cached in `~/.config/yugen/covers.json`.
 
 ## Building
+
+The UI is baked into the executable, so it has to be built first:
+
+```sh
+cd ui
+npm install
+npm run build
+```
+
+then:
 
 ```sh
 cmake -B build -G Ninja && cmake --build build
 ```
 
-The UI:
-
-```sh
-cd ui
-npm install
-```
+CMake picks up `ui/dist` when it configures and refuses to build without it. Re-running the build re-embeds whatever is in `ui/dist` at that point, so after changing the UI it is `npm run build` and then `cmake --build build`.
 
 ## Running
-
-The binary loads the UI from `http://localhost:5173/`, so the Vite dev server has to be up first:
-
-```sh
-cd ui && npm run dev
-```
-
-then, in another shell:
 
 ```sh
 ./build/yugen
 ```
+
+Nothing else has to be running: the interface is served out of the binary itself.
+
+While working on the UI the dev server is still the faster loop — `cd ui && npm run dev`, and point `UI_ENTRY` in `src/main.cpp` at `http://localhost:5173/` through `set_url` instead of `serve`.
 
 ## Layout
 

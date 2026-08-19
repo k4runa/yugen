@@ -16,6 +16,7 @@
 
 // third party
 #include <coco/stray/stray.hpp>
+#include <saucer/embedded/all.hpp>
 #include <saucer/app.hpp>
 #include <saucer/executor.hpp>
 #include <saucer/smartview.hpp>
@@ -33,8 +34,11 @@ using co = yugen::Core;
 
 namespace
 {
-     // the ui is served by vite in dev; point this at the built bundle to ship
-     constexpr const char* UI_URL = "http://localhost:5173/";
+     // the entry point of the bundle baked in by saucer_embed(), served from
+     // memory rather than fetched over http - there is no server to point at.
+     // the leading slash matters: it becomes the path of a saucer:// url, and
+     // the embedded files are keyed by exactly that path
+     constexpr const char* UI_ENTRY = "/index.html";
 
      constexpr int WINDOW_MIN_WIDTH = 720;
      constexpr int WINDOW_MIN_HEIGHT = 440;
@@ -315,7 +319,8 @@ coco::stray start(saucer::application* app)
       * The window is set up last, once every binding exists, so the page cannot
       * load and call into a function that has not been exposed yet.
       */
-     webview->set_url(UI_URL);
+     webview->embed(saucer::embedded::all());
+     webview->serve(UI_ENTRY);
      window->set_min_size({WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT});
      window->set_maximized(true);
      window->set_decorations(saucer::window::decoration::none);
