@@ -147,6 +147,43 @@ const SHAPE: Record<Source, { fields: number; ref: RegExp }> = {
 // yt-dlp prints NA for anything the flat listing does not carry
 const printed = (value?: string) => (value && value !== 'NA' ? value : undefined)
 
+// both searches print one flat list, a fixed number of lines per result
+async function run_search(on: Source, query: string): Promise<SearchResult[]> {
+    try {
+        const flat =
+            on === 'yt' ? await bridge().search_yt(query, 10) : await bridge().search_sc(query, 10)
+
+        const { fields, ref } = SHAPE[on]
+
+        return Array.from({ length: Math.floor(flat.length / fields) }, (_, i) => ({
+            title: flat[i * fields],
+            ref: flat[i * fields + 1],
+            thumbnail: printed(flat[i * fields + 2]),
+        }))
+            // a flat search also turns up channels and playlists, which are not tracks
+            .filter((result) => ref.test(result.ref))
+    } catch {
+        // yt-dlp is a subprocess and can simply fail; an empty answer is not
+        // remembered, so the next enter goes back out
+        return []
+    }
+}
+
+// download_with_ytdlp writes `<title> [<id>].mp3`, so a file in the library
+// carries both halves a search result can be recognised by
+function library_mark(name: string) {
+    const base = name.replace(/\.[^.]*$/, '')
+    const open = base.lastIndexOf(' [')
+
+    return open > 0 && base.endsWith(']')
+        ? { title: base.slice(0, open), id: base.slice(open + 2, -1) }
+        : { title: base, id: '' }
+}
+
+// punctuation is where the two sides disagree - yt-dlp swaps out whatever the
+// filesystem will not take - so a title comparison keeps letters and digits only
+const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+
 // the functions main.cpp exposes through saucer
 type Bridge = {
     fetch_songs(path: string): Promise<string[]>
@@ -639,6 +676,16 @@ export default function App() {
     const [query, set_query] = useState('')
     const [searching, set_searching] = useState(false)
     const [results, set_results] = useState<SearchResult[]>([])
+    // a search shells out to yt-dlp, and the two sources are tabs over the same
+    // query - flipping between them should not pay for it twice. the request is
+    // held alongside its answer so a tab left and returned to before it lands
+    // waits on the one already running instead of starting another.
+    const searches = useRef(
+        new Map<string, { pending: Promise<SearchResult[]>; found?: SearchResult[] }>(),
+    )
+    // switching tabs mid-flight leaves an answer in the air, and it must not land
+    // on top of the newer one
+    const search_run = useRef(0)
     const [downloading, set_downloading] = useState<string | null>(null)
     const [source, set_source] = useState<Source>('yt')
     const [search_open, set_search_open] = useState(false)
@@ -1070,28 +1117,65 @@ export default function App() {
     }
 
     async function search(on: Source = source) {
-        if (!query.trim()) return
+        const wanted = query.trim()
+        if (!wanted) return
 
-        set_searching(true)
         set_search_open(true)
 
-        // both searches print one flat list, a fixed number of lines per result
-        const flat: string[] =
-            on === 'yt' ? await bridge().search_yt(query, 10) : await bridge().search_sc(query, 10)
+        const run = ++search_run.current
+        const key = `${on}\n${wanted}`
+        const entry = searches.current.get(key)
 
-        const { fields, ref } = SHAPE[on]
+        // already answered: the list swaps over with no round trip, and without
+        // blanking out on the way
+        if (entry?.found) {
+            set_results(entry.found)
+            set_searching(false)
+            return
+        }
 
-        set_results(
-            Array.from({ length: Math.floor(flat.length / fields) }, (_, i) => ({
-                title: flat[i * fields],
-                ref: flat[i * fields + 1],
-                thumbnail: printed(flat[i * fields + 2]),
-            }))
-                // a flat search also turns up channels and playlists, which are not tracks
-                .filter((result) => ref.test(result.ref)),
-        )
+        set_results([])
+        set_searching(true)
+
+        const pending = entry?.pending ?? run_search(on, wanted)
+        if (!entry) searches.current.set(key, { pending })
+
+        const found = await pending
+
+        // the answer is filed before anything else looks at `run`: a tab switched
+        // away from mid-flight still paid for this, and going back to it should
+        // not pay again
+        if (found.length) searches.current.set(key, { pending, found })
+        // an empty answer is not worth remembering - the empty state invites
+        // another enter, and that has to be able to actually go out
+        else searches.current.delete(key)
+
+        // it is just not the list on screen any more
+        if (run !== search_run.current) return
+
+        set_results(found)
         set_searching(false)
     }
+
+    const owned = useMemo(() => {
+        const ids = new Set<string>()
+        const titles = new Set<string>()
+
+        for (const name of songs) {
+            const { title, id } = library_mark(name)
+
+            if (id) ids.add(id)
+            titles.add(fold(title))
+        }
+
+        return { ids, titles }
+    }, [songs])
+
+    // youtube hands back the same id the file is named with, so that match is
+    // exact. soundcloud hands back the page url instead and its bracketed id is
+    // a number the search never prints, which leaves the title to go on.
+    const owns = (result: SearchResult) =>
+        owned.ids.has(result.ref) || owned.titles.has(fold(result.title))
 
     // soundcloud sends an artwork url, youtube's is built from the video id
     const artwork = (result: SearchResult) =>
@@ -1099,12 +1183,16 @@ export default function App() {
 
     function switch_source(next: Source) {
         set_source(next)
-        set_results([])
 
         if (query.trim()) search(next)
+        else set_results([])
     }
 
     async function download(result: SearchResult) {
+        // the button is disabled for both of these, but the click is not the only
+        // way in and yt-dlp would happily fetch a second copy
+        if (downloading || owns(result)) return
+
         set_downloading(result.ref)
 
         if (source === 'yt') await bridge().download_yt(result.ref, FILE_PATH)
@@ -1823,10 +1911,16 @@ export default function App() {
                                                 results.map((result) => (
                                                     <button
                                                         key={result.ref}
-                                                        className='result'
-                                                        {...tip('Download')}
+                                                        className={`result${owns(result) ? ' owned' : ''}`}
+                                                        {...tip(
+                                                            owns(result)
+                                                                ? 'Already in your library'
+                                                                : 'Download',
+                                                        )}
                                                         onClick={() => download(result)}
-                                                        disabled={downloading !== null}
+                                                        disabled={
+                                                            downloading !== null || owns(result)
+                                                        }
                                                     >
                                                         {artwork(result) ? (
                                                             <img src={artwork(result)} alt='' />
@@ -1838,14 +1932,18 @@ export default function App() {
                                                                 {result.title}
                                                             </div>
                                                             <div className='muted'>
-                                                                {downloading === result.ref
-                                                                    ? 'Downloading...'
-                                                                    : source === 'yt'
-                                                                      ? 'youtube'
-                                                                      : 'soundcloud'}
+                                                                {owns(result)
+                                                                    ? 'In your library'
+                                                                    : downloading === result.ref
+                                                                      ? 'Downloading...'
+                                                                      : source === 'yt'
+                                                                        ? 'youtube'
+                                                                        : 'soundcloud'}
                                                             </div>
                                                         </div>
-                                                        {downloading === result.ref ? (
+                                                        {owns(result) ? (
+                                                            <Icon d={ICONS.check} size={15} />
+                                                        ) : downloading === result.ref ? (
                                                             <span className='spinner' />
                                                         ) : (
                                                             <Icon d={ICONS.download} size={15} />
