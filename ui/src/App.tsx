@@ -153,6 +153,8 @@ type Bridge = {
     get_metadata(path: string): Promise<string[]>
     get_cover(path: string): Promise<string>
     get_lyrics(title: string, artist: string): Promise<string>
+    set_activity(state: boolean): Promise<void>
+    get_activity(): Promise<boolean>
     play_music(path: string): Promise<void>
     get_position(): Promise<number>
     get_length(): Promise<number>
@@ -331,28 +333,48 @@ function parse_lyrics(raw: string): Line[] | null {
     return lines.sort((a, b) => a.at - b.at)
 }
 
-// the backend is polled once a second, far too coarse to land a lyric on its line,
-// so the gaps are filled in locally and corrected by every poll that arrives
-function useFinePosition(position: number, running: boolean) {
-    const [fine, set_fine] = useState(position)
+// the backend is polled once a second, far too coarse to move a progress bar or
+// to land a lyric on its line, so the gaps are filled in locally.
+//
+// the running figure goes to `paint` once a frame and `paint` writes it into the
+// dom itself. nothing here holds state, so counting between the polls costs no
+// react render at all.
+function useFineClock(position: number, running: boolean, paint: (seconds: number) => void) {
+    const draw = useRef(paint)
+    draw.current = paint
 
-    // the ticker is rebuilt around every poll that lands, so it always counts up
-    // from the last figure the backend gave rather than from its own last guess
-    useEffect(() => {
-        if (!running) return
+    // the count is anchored to the last poll rather than to its own last guess,
+    // so it can never drift further than one poll away from the backend
+    const from = useRef(0)
 
-        const from = performance.now()
-        const timer = setInterval(
-            () => set_fine(position + (performance.now() - from) / 1000),
-            120,
-        )
-
-        return () => clearInterval(timer)
+    // declared first, so on the commit a poll lands this re-anchors before either
+    // of the effects below reads it
+    useLayoutEffect(() => {
+        from.current = performance.now()
     }, [position, running])
 
-    // a seek or a track change moves the poll somewhere the count cannot have
-    // reached, and until the next tick the poll is the one telling the truth
-    return running && Math.abs(fine - position) < 3 ? fine : position
+    const at = (now: number) => (running ? position + (now - from.current) / 1000 : position)
+
+    // one paint per render, so a pause, a drag or a track change still lands on
+    // screen while the loop below is not running
+    useLayoutEffect(() => {
+        draw.current(at(performance.now()))
+    })
+
+    // and nothing is scheduled at all unless something is actually playing
+    useLayoutEffect(() => {
+        if (!running) return
+
+        let id = requestAnimationFrame(function tick(now) {
+            draw.current(at(now))
+            id = requestAnimationFrame(tick)
+        })
+
+        return () => cancelAnimationFrame(id)
+        // `at` closes over exactly these two, and the loop should only be rebuilt
+        // when they move
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [position, running])
 }
 
 type Tip = { text: string; x: number; y: number; below: boolean }
@@ -525,6 +547,8 @@ const ICONS = {
     pin: 'M8 3h8v2h-1l1 6h1v2h-4v6h-2v-6H7v-2h1l1-6H8z',
     clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 7v5l3.5 2',
     aura: 'M9.5 14.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11M14.5 20.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11',
+    discord:
+        'M9 7.5C11 7 13 7 15 7.5L16.4 5.6 18.6 6.6C21.4 9.4 21.9 14 20.3 17.6L18.2 20 16.6 17.8C13.6 18.9 10.4 18.9 7.4 17.8L5.8 20 3.7 17.6C2.1 14 2.6 9.4 5.4 6.6L7.6 5.6ZM9.8 13.3a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6M14.2 13.3a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6',
 }
 
 export default function App() {
@@ -534,6 +558,7 @@ export default function App() {
     const [aura_on, set_aura_on] = useState(() => stored_flag('aura_on', true))
     const [aura, set_aura] = useState(() => stored_number('aura', 50, AURA_RANGE))
     const [aura_menu, set_aura_menu] = useState<{ x: number; y: number } | null>(null)
+    const [share_dc, set_share_dc] = useState(() => stored_flag('share_dc', true))
     const [view, set_view] = useState<View>('library')
     const [selection, set_selection] = useState<string | null>(null)
 
@@ -780,6 +805,15 @@ export default function App() {
         fetch_songs()
         sync_liked()
         sync_playlists()
+    }, [])
+
+    // the flag is a ui preference like the theme or the tint, so it lives in
+    // localStorage and the backend is simply told what it is on the way up. its
+    // own copy starts every launch at `on` and is never written anywhere, so
+    // get_activity has nothing to say here that this side does not already know.
+    useEffect(() => {
+        bridge().set_activity(share_dc)
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- the stored value, once
     }, [])
 
     // kept in a ref so the poller below never has to be torn down and rebuilt
@@ -1465,17 +1499,32 @@ export default function App() {
     const awaiting_lyrics = !!current && !(current in lyrics)
     const timed = useMemo(() => (sheet ? parse_lyrics(sheet) : null), [sheet])
 
-    const fine_position = useFinePosition(position, !!current && !paused)
+    // the bar and the clock are written straight into these two nodes every frame.
+    // the lyric line is the only thing the count moves that needs a render, and it
+    // turns over a few times a minute rather than a few times a second.
+    const progress_fill = useRef<HTMLSpanElement>(null)
+    const elapsed = useRef<HTMLSpanElement>(null)
 
-    // the line in force is the last one whose stamp has passed
-    const line_now = useMemo(() => {
-        if (!timed) return -1
+    const [line_now, set_line_now] = useState(-1)
 
+    useFineClock(position, !!current && !paused, (seconds) => {
+        // a drag is showing where the pointer is, not where the track is, and the
+        // count can run a little past the end before the poll that stops it lands
+        const at = Math.min(seeking ?? seconds, length || Infinity)
+
+        const bar = progress_fill.current
+        if (bar) bar.style.width = `${length ? (at / length) * 100 : 0}%`
+
+        const clock = elapsed.current
+        const shown = format_time(at)
+        if (clock && clock.textContent !== shown) clock.textContent = shown
+
+        // the line in force is the last one whose stamp has passed
         let index = -1
-        while (index + 1 < timed.length && timed[index + 1].at <= fine_position + 0.15) index++
+        if (timed) while (index + 1 < timed.length && timed[index + 1].at <= at + 0.15) index++
 
-        return index
-    }, [timed, fine_position])
+        if (index !== line_now) set_line_now(index)
+    })
 
     const lyric_box = useRef<HTMLDivElement>(null)
 
@@ -1928,7 +1977,12 @@ export default function App() {
 
                         {current && (
                             <section className='lyrics'>
-                                <h2 className='section-title'>Lyrics</h2>
+                                <div className='lyric-head'>
+                                    <h2 className='section-title'>Lyrics</h2>
+                                    {/* without stamps there is no line to follow and
+                                        nothing to jump to, which is worth saying */}
+                                    {sheet && !timed && <span className='muted'>Not synced</span>}
+                                </div>
 
                                 {timed ? (
                                     <div className='lyric-lines' ref={lyric_box}>
@@ -2246,11 +2300,7 @@ export default function App() {
                     onPointerCancel={() => set_seeking(null)}
                 >
                     <div className='progress-track'>
-                        <span
-                            style={{
-                                width: `${length ? ((seeking ?? position) / length) * 100 : 0}%`,
-                            }}
-                        />
+                        <span ref={progress_fill} />
                     </div>
                 </div>
 
@@ -2319,6 +2369,25 @@ export default function App() {
 
                 <div className='player-right'>
                     <button
+                        className={`icon-btn tiny${share_dc ? ' on' : ''}`}
+                        {...tip(
+                            share_dc
+                                ? 'Stop sharing activity on Discord'
+                                : 'Share activity on Discord',
+                        )}
+                        aria-pressed={share_dc}
+                        onClick={async () => {
+                            // setting it rather than flipping it, so a click that
+                            // lands twice cannot leave the two sides disagreeing
+                            await bridge().set_activity(!share_dc)
+
+                            set_share_dc(!share_dc)
+                            save_pref('share_dc', !share_dc)
+                        }}
+                    >
+                        <Icon d={ICONS.discord} size={15} />
+                    </button>
+                    <button
                         className={`icon-btn tiny${aura_on ? ' on' : ''}`}
                         {...tip(
                             !aura_on
@@ -2366,7 +2435,7 @@ export default function App() {
                             size={15}
                         />
                     </button>
-                    {format_time(position)} / {format_time(length)}
+                    <span ref={elapsed}>0:00</span> / {format_time(length)}
                 </div>
             </div>
 

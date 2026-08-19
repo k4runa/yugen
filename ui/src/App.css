@@ -1196,17 +1196,13 @@ button {
     height: 0.375rem;
 }
 
+/* the width is set per frame from a requestAnimationFrame loop, so there is
+   nothing left for a transition to smooth out - it would only lag behind */
 .progress span {
     display: block;
     height: 100%;
     background: var(--accent);
     box-shadow: 0 0 1rem var(--accent-glow);
-    transition:
-        width 0.3s linear,
-        background var(--slow) ease;
-}
-
-.progress.dragging span {
     transition: background var(--slow) ease;
 }
 
@@ -1331,6 +1327,20 @@ button {
 .search-body::-webkit-scrollbar-track,
 .context-menu.submenu::-webkit-scrollbar-track {
     background: none;
+}
+
+/* the scrollbar is painted right against the panel edge, and near the top and
+   bottom that edge is a curve, so the thumb reads as hanging outside it. the
+   track is held clear of both corners instead of the radius being given up. */
+.sidebar::-webkit-scrollbar-track,
+.main::-webkit-scrollbar-track,
+.rightbar::-webkit-scrollbar-track {
+    margin: var(--radius) 0;
+}
+
+.search-body::-webkit-scrollbar-track,
+.context-menu.submenu::-webkit-scrollbar-track {
+    margin: 0.625rem 0;
 }
 
 .sidebar::-webkit-scrollbar-thumb,
@@ -1878,6 +1888,19 @@ button {
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+.lyric-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.625rem;
+    padding-left: 0.5rem;
+}
+
+.lyric-head .section-title {
+    margin-bottom: 0;
+    padding-left: 0;
 }
 
 /* its own scroller: the rail below it stays where the reader left it while the
