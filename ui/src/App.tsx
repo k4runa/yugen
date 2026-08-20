@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
-const FILE_PATH = '/home/g4lice/Musics/'
 const LAYOUT_KEY = 'yugen.layout'
 
 const AURA_RANGE = [0, 100] as const
@@ -220,6 +219,7 @@ type Bridge = {
     remove_from_playlist(playlist: string, name: string): Promise<boolean>
     set_volume(volume: number) : Promise<void>
     load_volume() : Promise<number>
+    get_file_path(): Promise<string>
 }
 
 declare global {
@@ -235,6 +235,18 @@ const tip = (text: string) => ({ 'data-tip': text, 'aria-label': text })
 
 // saucer injects the bridge on the window at runtime
 const bridge = () => window.saucer.exposed
+
+// the music folder is the backend's to decide, so it is asked for once and kept
+// here. every call site appends a file name straight onto it, hence the slash.
+let music_path = ''
+async function music_dir() {
+    if (!music_path) {
+        const path = await bridge().get_file_path()
+        music_path = path.endsWith('/') ? path : `${path}/`
+    }
+
+    return music_path
+}
 
 function format_time(seconds: number) {
     if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
@@ -615,6 +627,7 @@ export default function App() {
     const [covers_map, set_covers_map] = useState<Record<string, string>>({})
     const [liked, set_liked] = useState<Set<string>>(new Set())
     const [loading, set_loading] = useState(false)
+    const [music_folder, set_music_folder] = useState('')
 
     const [current, set_current] = useState<string | null>(null)
     const [paused, set_paused] = useState(false)
@@ -892,6 +905,10 @@ export default function App() {
     }, [])
 
     useEffect(() => {
+        music_dir().then(set_music_folder)
+    }, [])
+
+    useEffect(() => {
         bridge().load_volume().then((v) => {
             set_volume_state(v)
             if (v > 0) set_prev_volume(v)
@@ -914,14 +931,15 @@ export default function App() {
 
     async function fetch_songs() {
         set_loading(true)
-        const names: string[] = await bridge().fetch_songs(FILE_PATH)
+        const dir = await music_dir()
+        const names: string[] = await bridge().fetch_songs(dir)
 
         const metadata: Record<string, string[]> = {}
         const covers: Record<string, string> = {}
 
         for (const name of names) {
-            metadata[name] = await bridge().get_metadata(FILE_PATH + name)
-            covers[name] = await bridge().get_cover(FILE_PATH + name)
+            metadata[name] = await bridge().get_metadata(dir + name)
+            covers[name] = await bridge().get_cover(dir + name)
         }
 
         set_songs(names)
@@ -1032,7 +1050,7 @@ export default function App() {
     }
 
     async function remove_song(name: string) {
-        await bridge().delete_song(FILE_PATH + name)
+        await bridge().delete_song((await music_dir()) + name)
 
         if (current === name) set_current(null)
 
@@ -1050,7 +1068,7 @@ export default function App() {
         // the tags travel with the call: the backend needs them for the discord
         // status and this side has already read them into metadata_map
         const meta = metadata_map[name] ?? []
-        await bridge().play_music(FILE_PATH + name, meta[0] || name, meta[1] || "", meta[2] || "")
+        await bridge().play_music((await music_dir()) + name, meta[0] || name, meta[1] || "", meta[2] || "")
         set_current(name)
         set_paused(false)
     }
@@ -1195,8 +1213,10 @@ export default function App() {
 
         set_downloading(result.ref)
 
-        if (source === 'yt') await bridge().download_yt(result.ref, FILE_PATH)
-        else await bridge().download_sc(result.ref, FILE_PATH)
+        const dir = await music_dir()
+
+        if (source === 'yt') await bridge().download_yt(result.ref, dir)
+        else await bridge().download_sc(result.ref, dir)
 
         set_downloading(null)
         await fetch_songs()
@@ -2104,7 +2124,7 @@ export default function App() {
                                   ? 'No liked songs yet.'
                                   : view === 'playlist'
                                     ? 'This playlist is empty. Right-click a track to add it.'
-                                    : `No mp3 files found in ${FILE_PATH}`}
+                                    : `No mp3 files found in ${music_folder}`}
                         </p>
                     )}
                 </main>

@@ -54,8 +54,9 @@ Or install it system-wide, which also drops in the desktop entry and icons:
 sudo cmake --install build
 ```
 
-The music folder is hardcoded in `ui/src/App.tsx` as `FILE_PATH` — point it at
-your own library. Playlists and liked songs live in `~/.config/yugen/`.
+The music folder comes from the backend's `get_file_path` binding, which points
+at `Music/` inside the app's data directory. Playlists and liked songs live in
+`~/.config/yugen/`.
 
 ## License
 

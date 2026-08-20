@@ -1,3 +1,5 @@
+#include <pwd.h>
+#include <unistd.h>
 #define MINIAUDIO_IMPLEMENTATION
 
 #ifndef APPLICATION_ID
@@ -119,7 +121,7 @@ coco::stray start(saucer::application* app)
           std::println("[ERROR] Engine init failed: {}", static_cast<int>(res));
      }
 
-     fs::create_directories(yugen::data_dir());
+     fs::create_directories(yugen::data_dir() + "/Music");
 
      window->set_title("yugen");
 
@@ -306,21 +308,25 @@ coco::stray start(saucer::application* app)
       * startup to draw the switch in the right position, since the setting lives
       * on this side and not in the page.
       */
-     webview->expose("set_activity", [](bool state) {
+     webview->expose("set_activity", [](bool state) -> void {
           yugen::set_activity(state);
           std::println("[INFO] Share activity on discord: {}", state);
      });
 
-     webview->expose("set_volume", [](float vol) {
+     webview->expose("set_volume", [](float vol) -> void {
           sm::set_volume(vol);
      });
 
-     webview->expose("get_activity", [] {
+     webview->expose("get_activity", [] ->bool {
           return yugen::get_activity();
      });
 
-     webview->expose("load_volume", [] {
+     webview->expose("load_volume", [] -> float {
           return sm::load_volume();
+     });
+
+     webview->expose("get_file_path", [] -> std::string{
+          return yugen::data_dir() + "/Music";
      });
 
      /*
