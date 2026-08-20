@@ -51,6 +51,8 @@ namespace yugen
           constexpr const char* LIKED_SONGS_FILE = "/liked_songs.json";
           constexpr const char* COVERS_FILE = "/covers.json";
 
+          constexpr const int MIN_COUNT = 50;
+
           // what is shown when no cover is known: an asset uploaded to the
           // application on discord's developer portal, named by its key
           constexpr const char* DISCORD_LOGO_ASSET = "yugen";
@@ -140,6 +142,9 @@ namespace yugen
      // yt-dlp from opening each video, which is what makes the search fast.
      std::vector<std::string> Core::search_youtube(const std::string& query, int count)
      {
+          // Ensure minimum results are fetched for frontend pagination.
+          // yt-dlp returns only available results if fewer exist, no error handling needed.
+          if(count < MIN_COUNT) count = MIN_COUNT;
           const std::string target = "ytsearch" + std::to_string(count) + ":" + query;
 
           return run_command_lines("yt-dlp " + shell_quote(target) +
@@ -150,6 +155,10 @@ namespace yugen
      // to rebuild a url from the way youtube does, so the url is carried along.
      std::vector<std::string> Core::search_sound_cloud(const std::string& query, int count)
      {
+
+
+          if(count < MIN_COUNT) count = MIN_COUNT; 
+
           const std::string target = "scsearch" + std::to_string(count) + ":" + query;
 
           return run_command_lines("yt-dlp " + shell_quote(target) +
