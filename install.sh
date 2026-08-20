@@ -2,8 +2,9 @@
 #
 # Yugen installer. Two paths, and they have deliberately different contracts:
 #
-#   AppImage      the bundle carries webkitgtk, yt-dlp and ffmpeg itself, so
-#                 nothing is installed system-wide and root is never needed
+#   AppImage      the bundle carries yt-dlp and ffmpeg, so nothing is
+#                 installed system-wide and root is never needed. WebKitGTK
+#                 stays the host's job and is only checked for.
 #   From source   the machine has to become a build host, so the distro
 #                 packages, a nightly yt-dlp and ffmpeg all get installed
 #
@@ -19,6 +20,11 @@ APPIMAGE_URL="https://github.com/$REPO/releases/download/$VERSION/Yugen-x86_64.A
 # the one thing an AppImage can never carry. Keep this in step with what
 # packaging/appimage/build.sh reports after a release build.
 APPIMAGE_MIN_GLIBC="2.35"
+
+# where the source build lands. assets/yugen.desktop runs plain `yugen`, so
+# this only has to be somewhere on PATH - but it has to be the same place every
+# time, or old copies pile up and shadow each other.
+PREFIX=${PREFIX:-/usr/local}
 
 INSTALL_DIR="$HOME/.local/bin"
 LIB_DIR="$HOME/.local/lib/yugen"
@@ -130,10 +136,9 @@ check_path() {
 
 # ---------------------------------------------------------------- appimage --
 
-# The AppImage built by packaging/appimage/build.sh carries webkitgtk and its
-# helper processes, yt-dlp and ffmpeg. Nothing here installs a package, and
-# nothing here asks for root: the two things it cannot carry are glibc and the
-# kernel's user namespaces, so both are checked up front instead.
+# The AppImage carries yt-dlp and ffmpeg. WebKitGTK is not in there - it
+# hardcodes the path to its helper processes, so a bundled copy cannot be found
+# without mounting it over that path - and it is one distro package away.
 check_appimage_host() {
     local glibc=""
     glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}') || true
@@ -145,12 +150,20 @@ check_appimage_host() {
         exit 1
     fi
 
-    # the bundled webkit is bind-mounted into place by bwrap, which needs
-    # unprivileged user namespaces
-    if have unshare && ! unshare --user true 2>/dev/null; then
-        warn "Unprivileged user namespaces look disabled on this kernel."
-        warn "If yugen fails to start, enable them with:"
-        printf "    ${BOLD}sudo sysctl -w kernel.unprivileged_userns_clone=1${RESET}\n"
+    # saying so here is the whole point: without it the app dies at startup with
+    # a message about a child process that explains nothing
+    if ! pkg-config --exists webkitgtk-6.0 2>/dev/null \
+       && ! ls /usr/lib*/libwebkitgtk-6.0.so.* >/dev/null 2>&1 \
+       && ! ls /usr/lib/*/libwebkitgtk-6.0.so.* >/dev/null 2>&1; then
+        warn "WebKitGTK 6.0 does not look installed. yugen will not start without it:"
+        case "$(detect_distro)" in
+            arch)   printf "    ${BOLD}sudo pacman -S webkitgtk-6.0${RESET}\n" ;;
+            debian) printf "    ${BOLD}sudo apt install libwebkitgtk-6.0-4${RESET}\n" ;;
+            fedora) printf "    ${BOLD}sudo dnf install webkitgtk6.0${RESET}\n" ;;
+            suse)   printf "    ${BOLD}sudo zypper install libwebkitgtk-6_0-4${RESET}\n" ;;
+            *)      printf "    install your distro's webkitgtk-6.0 package\n" ;;
+        esac
+        printf "\n"
     fi
 }
 
@@ -283,20 +296,37 @@ build_from_source() {
     ( cd "$src/ui" && npm install && npm run build )
 
     info "Building yugen..."
-    cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_BUILD_TYPE=Release
+    # the prefix has to be spelled out. Without it cmake reuses whatever is
+    # cached in an existing build tree, and installing to a different prefix
+    # than last time leaves two binaries on PATH with the stale one winning.
+    cmake -S "$src" -B "$src/build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX"
+
     cmake --build "$src/build" --parallel
 
-    info "Installing to /usr/local..."
+    info "Installing to $PREFIX..."
     # CMakeLists installs the binary, assets/yugen.desktop and all six icon
     # sizes, so there is no desktop entry to write by hand here
     need_root cmake --install "$src/build"
 
-    have update-desktop-database && need_root update-desktop-database /usr/local/share/applications 2>/dev/null || true
-    have gtk-update-icon-cache && need_root gtk-update-icon-cache -qtf /usr/local/share/icons/hicolor 2>/dev/null || true
+    have update-desktop-database && need_root update-desktop-database "$PREFIX/share/applications" 2>/dev/null || true
+    have gtk-update-icon-cache && need_root gtk-update-icon-cache -qtf "$PREFIX/share/icons/hicolor" 2>/dev/null || true
+
+    # the desktop entry runs plain `yugen`, so an older copy sitting on an
+    # earlier PATH entry would keep being the one that starts
+    hash -r 2>/dev/null || true
+    local found
+    found=$(command -v yugen || true)
+    if [ -n "$found" ] && [ "$found" != "$PREFIX/bin/yugen" ]; then
+        warn "$found comes first on your PATH and is not the copy just installed."
+        warn "Remove it so the new one is the one that runs:"
+        printf "    ${BOLD}sudo rm %s${RESET}\n" "$found"
+    fi
 
     [ -n "$cleanup" ] && rm -rf "$(dirname "$cleanup")"
 
-    ok "Installed to /usr/local/bin/yugen"
+    ok "Installed to $PREFIX/bin/yugen"
 }
 
 # -------------------------------------------------------------------- main --
@@ -305,7 +335,7 @@ usage() {
     cat <<EOF
 Usage: install.sh [--appimage|--source]
 
-  --appimage   Download the self-contained bundle. No packages, no root.
+  --appimage   Download the bundle. No packages installed, no root.
   --source     Install the toolchain and dependencies, then build and install.
 
 With no argument the script asks.
@@ -326,7 +356,7 @@ main() {
     printf "\n${BOLD}  ▶ Yugen Installer${RESET}\n\n"
 
     if [ -z "$mode" ]; then
-        printf "  ${BOLD}1)${RESET} AppImage — self-contained, nothing installed system-wide\n"
+        printf "  ${BOLD}1)${RESET} AppImage — nothing installed system-wide, needs webkitgtk-6.0\n"
         printf "  ${BOLD}2)${RESET} Build from source — installs dependencies, needs root\n\n"
         mode=$(ask "  Choose [1/2]: ")
         printf "\n"
