@@ -88,7 +88,62 @@ function save_pref(key: string, value: string | string[] | boolean | number) {
 }
 
 type Theme = 'system' | 'light' | 'dark'
-type View = 'library' | 'liked' | 'albums' | 'artists' | 'playlist'
+
+const VIEWS = ['library', 'liked', 'albums', 'artists', 'playlist'] as const
+type View = (typeof VIEWS)[number]
+
+/*
+ * What was playing when the app last went away. It is written while the track
+ * runs rather than on the way out: webkitgtk does not reliably give the page a
+ * turn when the window closes, so the last tick that made it to disk is what a
+ * restart picks up. Kept apart from the layout blob because it is rewritten
+ * every second and none of it is a preference.
+ */
+const PLAYBACK_KEY = 'yugen.playback'
+
+type Playback = {
+    song: string
+    position: number
+    // the listing the queue was built from, so prev/next carry on where they left off
+    view: View
+    selection: string | null
+    shuffle: boolean
+}
+
+function stored_playback(): Playback | null {
+    try {
+        const value = JSON.parse(localStorage.getItem(PLAYBACK_KEY) ?? 'null')
+
+        if (!value || typeof value.song !== 'string') return null
+
+        return {
+            song: value.song,
+            position:
+                typeof value.position === 'number' && Number.isFinite(value.position)
+                    ? Math.max(value.position, 0)
+                    : 0,
+            view: VIEWS.includes(value.view) ? value.view : 'library',
+            selection: typeof value.selection === 'string' ? value.selection : null,
+            shuffle: value.shuffle === true,
+        }
+    } catch {
+        return null
+    }
+}
+
+function save_playback(state: Playback) {
+    try {
+        localStorage.setItem(PLAYBACK_KEY, JSON.stringify(state))
+    } catch {
+        // storage unavailable, the next launch just comes up empty
+    }
+}
+
+// the album and artist rows are keyed off these, and a blank tag falls into one
+// shared bucket rather than a nameless one of its own
+const artist_tag = (meta?: string[]) => meta?.[1] || 'Unknown artist'
+const album_tag = (meta?: string[]) => meta?.[2] || 'Unknown album'
+const group_key = (tag: string) => tag.trim() || 'Unknown'
 
 // right-click targets: a track, a playlist in the sidebar, or the sidebar itself
 type MenuTarget =
@@ -607,6 +662,9 @@ const ICONS = {
 }
 
 export default function App() {
+    // read once, off the last tick the previous run wrote
+    const saved_playback = useMemo(stored_playback, [])
+
     const [theme, set_theme] = useState<Theme>('system')
     // the switch, and how much of the cover reaches the background while it is on:
     // 0 leaves a scrim over nearly all of it, 100 is the artwork with none at all
@@ -614,8 +672,8 @@ export default function App() {
     const [aura, set_aura] = useState(() => stored_number('aura', 50, AURA_RANGE))
     const [aura_menu, set_aura_menu] = useState<{ x: number; y: number } | null>(null)
     const [share_dc, set_share_dc] = useState(() => stored_flag('share_dc', true))
-    const [view, set_view] = useState<View>('library')
-    const [selection, set_selection] = useState<string | null>(null)
+    const [view, set_view] = useState<View>(saved_playback?.view ?? 'library')
+    const [selection, set_selection] = useState<string | null>(saved_playback?.selection ?? null)
 
     const [volume, set_volume_state] = useState(1)
     // what unmuting goes back to, so the level survives a trip through zero
@@ -628,6 +686,7 @@ export default function App() {
     const [liked, set_liked] = useState<Set<string>>(new Set())
     const [loading, set_loading] = useState(false)
     const [music_folder, set_music_folder] = useState('')
+    const [scan_error, set_scan_error] = useState<string | null>(null)
 
     const [current, set_current] = useState<string | null>(null)
     const [paused, set_paused] = useState(false)
@@ -635,7 +694,7 @@ export default function App() {
     const [length, set_length] = useState(0)
     const [position, set_position] = useState(0)
     const [seeking, set_seeking] = useState<number | null>(null)
-    const [shuffle_on, set_shuffle_on] = useState(false)
+    const [shuffle_on, set_shuffle_on] = useState(saved_playback?.shuffle ?? false)
     const [shuffled, set_shuffled] = useState<{
         key: string
         order: string[]
@@ -890,9 +949,27 @@ export default function App() {
     }, [menu])
 
     useEffect(() => {
-        fetch_songs()
-        sync_liked()
-        sync_playlists()
+        void (async () => {
+            const [library, lists] = await Promise.all([fetch_songs(), sync_playlists()])
+            sync_liked()
+
+            // the listing that was open last time may not have survived: a
+            // playlist that was deleted, an album whose files left the folder
+            const opened = saved_playback?.selection
+            if (!opened) return
+
+            const tag = saved_playback.view === 'artists' ? artist_tag : album_tag
+            const alive =
+                saved_playback.view === 'playlist'
+                    ? !!lists?.[opened]
+                    : library.names.some((name) => group_key(tag(library.metadata[name])) === opened)
+
+            if (alive) return
+
+            set_view('library')
+            set_selection(null)
+        })()
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on the way up
     }, [])
 
     // the flag is a ui preference like the theme or the tint, so it lives in
@@ -929,23 +1006,91 @@ export default function App() {
         return () => clearInterval(interval)
     }, [])
 
+    /*
+     * Bringing the last track back. Nothing is loaded at startup and the backend
+     * has no way to load a sound without starting it, so it is played and then
+     * stopped again - stop() is a pause, the cursor survives it, and seek() only
+     * wants a loaded sound, not a running one. What leaks out is one ipc round
+     * trip of audio.
+     */
+    const restored = useRef(false)
+
+    useEffect(() => {
+        // the listing landing is the cue: the file has to still be on disk, and
+        // the tags have to be in hand for the discord status
+        if (restored.current || current || !songs.length) return
+
+        restored.current = true
+
+        if (!saved_playback || !songs.includes(saved_playback.song)) return
+
+        const { song, position: saved_position } = saved_playback
+
+        void (async () => {
+            const meta = metadata_map[song] ?? []
+
+            await bridge().play_music(
+                (await music_dir()) + song,
+                meta[0] || song,
+                meta[1] || '',
+                meta[2] || '',
+            )
+            await bridge().stop()
+
+            const len = await bridge().get_length()
+
+            // a cursor parked at the end trips is_finished, and the queue would
+            // move on the moment the track is resumed
+            const at = saved_position < len - 2 ? saved_position : 0
+            if (at) await bridge().seek(at)
+
+            set_current(song)
+            set_paused(true)
+            set_length(len)
+            set_position(at)
+        })()
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- the rest is read once, on the cue
+    }, [songs])
+
+    // the other half of the restore: see PLAYBACK_KEY. position moves once a
+    // second while a track runs, so that is how often this writes
+    useEffect(() => {
+        if (!current) return
+
+        save_playback({ song: current, position, view, selection, shuffle: shuffle_on })
+    }, [current, position, view, selection, shuffle_on])
+
     async function fetch_songs() {
         set_loading(true)
-        const dir = await music_dir()
-        const names: string[] = await bridge().fetch_songs(dir)
 
-        const metadata: Record<string, string[]> = {}
-        const covers: Record<string, string> = {}
+        // anything in here can throw - an old backend with no get_file_path
+        // binding, a music folder that is not there - and without the catch the
+        // spinner below simply never stops, which says nothing about why
+        try {
+            const dir = await music_dir()
+            const names: string[] = await bridge().fetch_songs(dir)
 
-        for (const name of names) {
-            metadata[name] = await bridge().get_metadata(dir + name)
-            covers[name] = await bridge().get_cover(dir + name)
+            const metadata: Record<string, string[]> = {}
+            const covers: Record<string, string> = {}
+
+            for (const name of names) {
+                metadata[name] = await bridge().get_metadata(dir + name)
+                covers[name] = await bridge().get_cover(dir + name)
+            }
+
+            set_songs(names)
+            set_metadata_map(metadata)
+            set_covers_map(covers)
+            set_scan_error(null)
+
+            return { names, metadata }
+        } catch (e) {
+            set_scan_error(e instanceof Error ? e.message : String(e))
+            set_songs([])
+            return { names: [] as string[], metadata: {} as Record<string, string[]> }
+        } finally {
+            set_loading(false)
         }
-
-        set_songs(names)
-        set_metadata_map(metadata)
-        set_covers_map(covers)
-        set_loading(false)
     }
 
     // liked_songs.json is the source of truth, so read it back after every write
@@ -984,9 +1129,13 @@ export default function App() {
             const names = await bridge().get_playlists()
             const tracks = await Promise.all(names.map((name) => bridge().get_playlist(name)))
 
-            set_playlists(Object.fromEntries(names.map((name, i) => [name, tracks[i]])))
+            const map = Object.fromEntries(names.map((name, i) => [name, tracks[i]]))
+            set_playlists(map)
+
+            return map
         } catch {
             // keep the last known list rather than blanking the sidebar
+            return null
         }
     }
 
@@ -1234,8 +1383,8 @@ export default function App() {
     }
 
     const title_of = (name: string) => metadata_map[name]?.[0] || name.replace(/\.mp3$/i, '')
-    const artist_of = (name: string) => metadata_map[name]?.[1] || 'Unknown artist'
-    const album_of = (name: string) => metadata_map[name]?.[2] || 'Unknown album'
+    const artist_of = (name: string) => artist_tag(metadata_map[name])
+    const album_of = (name: string) => album_tag(metadata_map[name])
     const cover_of = (name: string) => covers_map[name]
     const length_of = (name: string) => Number(metadata_map[name]?.[3]) || 0
     const added_of = (name: string) => Number(metadata_map[name]?.[4]) || 0
@@ -2120,7 +2269,9 @@ export default function App() {
                         <p className='empty'>
                             {loading
                                 ? 'Scanning your library...'
-                                : view === 'liked'
+                                : scan_error
+                                  ? `Could not read your library: ${scan_error}`
+                                  : view === 'liked'
                                   ? 'No liked songs yet.'
                                   : view === 'playlist'
                                     ? 'This playlist is empty. Right-click a track to add it.'
