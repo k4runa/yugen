@@ -85,6 +85,8 @@ namespace yugen
                static std::string lookup_cover_url(const std::string& title, const std::string& artist);
                static std::string base64_encode(const unsigned char* data, std::size_t len);
 
+               static std::size_t get_playlist_count();
+               
           private:
                // wraps an argument in single quotes so a title carrying " or
                // $(...) cannot break out of the command line

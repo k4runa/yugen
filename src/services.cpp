@@ -270,6 +270,12 @@ namespace yugen
           return "";
      }
 
+     std::size_t Core::get_playlist_count()
+     {
+          return MusicManager::get_playlists().size() + 1; 
+     }
+     
+
      // Reads the embedded cover out of the mp3's ID3v2 APIC frame and returns it
      // base64 encoded, so the ui can drop it into an <img> src without a file on
      // disk to serve. Empty string when the file carries no artwork.

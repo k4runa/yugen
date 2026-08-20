@@ -277,6 +277,15 @@ button {
     display: grid;
     /* the panels float on the artwork instead of sharing one card */
     gap: var(--gutter);
+    /* hiding a panel closes its column rather than dropping it: the main area
+       widens into the space instead of jumping over to fill it */
+    transition: grid-template-columns var(--mid) var(--spring);
+}
+
+/* dragging an edge writes a width on every pointer move, and easing each of them
+   would leave the column trailing the cursor */
+.frame.resizing {
+    transition: none;
 }
 
 .sidebar,
@@ -284,6 +293,34 @@ button {
 .rightbar {
     min-height: 0;
     border-radius: var(--radius);
+}
+
+/* a collapsed panel keeps its place in the grid at zero width. it is faded out
+   well before the column finishes closing, so the contents are not watched being
+   squeezed, and on the way back it waits for room before it comes up. */
+.sidebar,
+.rightbar {
+    transition:
+        opacity 0.2s ease 0.1s,
+        transform var(--mid) var(--spring);
+}
+
+.sidebar.collapsed,
+.rightbar.collapsed {
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+    transition:
+        opacity 0.13s ease,
+        transform var(--mid) var(--spring);
+}
+
+.sidebar.collapsed {
+    transform: translateX(-0.75rem);
+}
+
+.rightbar.collapsed {
+    transform: translateX(0.75rem);
 }
 
 /* drag handles sitting on the column edges */
@@ -327,7 +364,26 @@ button {
     flex-direction: column;
     padding: 1.125rem 0.75rem;
     gap: 0.1875rem;
+    overflow: hidden;
+}
+
+/* the brand, the library rows and the chips hold their place: only what the
+   chips select scrolls, however long that list gets */
+.shelf {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1875rem;
     overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* the rows fill the shelf, so its own pill is not inset the way the panel's is */
+.shelf > .nav-pill {
+    left: 0;
+    right: 0;
 }
 
 /* the one highlight that travels between rows, so switching views reads as a
@@ -871,6 +927,33 @@ button {
     min-width: 0;
 }
 
+.title-edit {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.icon-btn.tiny.edit {
+    flex: none;
+    opacity: 0;
+    transform: scale(0.9);
+    transition:
+        opacity var(--fast) ease,
+        transform var(--fast) var(--spring),
+        color var(--fast) ease;
+}
+
+.title-edit:hover .icon-btn.tiny.edit,
+.icon-btn.tiny.edit:focus-visible {
+    opacity: 1;
+    transform: none;
+}
+
+.icon-btn.tiny.edit:hover {
+    color: var(--text);
+}
+
 .view-head .muted {
     flex: none;
 }
@@ -996,21 +1079,29 @@ button {
         transform var(--fast) var(--spring);
 }
 
-.result:hover:not(:disabled) {
+/* a row that cannot be clicked is marked with aria-disabled rather than the
+   attribute: the tooltip is delegated off pointer events, and a disabled button
+   emits none of them */
+.result:hover:not([aria-disabled='true']) {
     background: var(--hover);
 }
 
-.result:active:not(:disabled) {
+.result:active:not([aria-disabled='true']) {
     transform: scale(0.98);
 }
 
-.result:disabled {
+.result[aria-disabled='true'] {
     cursor: default;
 }
 
 /* already downloaded: still readable, but plainly not on offer */
 .result.owned {
     opacity: 0.55;
+}
+
+/* on its way in: dimmed like the owned rows it is about to join */
+.result.busy {
+    opacity: 0.7;
 }
 
 .result.owned .ico {
@@ -1323,7 +1414,7 @@ button {
 
 /* ---------- overlay scrollbars ---------- */
 
-.sidebar::-webkit-scrollbar,
+.shelf::-webkit-scrollbar,
 .main::-webkit-scrollbar,
 .rightbar::-webkit-scrollbar,
 .search-body::-webkit-scrollbar,
@@ -1331,7 +1422,7 @@ button {
     width: 0.75rem;
 }
 
-.sidebar::-webkit-scrollbar-track,
+.shelf::-webkit-scrollbar-track,
 .main::-webkit-scrollbar-track,
 .rightbar::-webkit-scrollbar-track,
 .search-body::-webkit-scrollbar-track,
@@ -1342,10 +1433,24 @@ button {
 /* the scrollbar is painted right against the panel edge, and near the top and
    bottom that edge is a curve, so the thumb reads as hanging outside it. the
    track is held clear of both corners instead of the radius being given up. */
-.sidebar::-webkit-scrollbar-track,
 .main::-webkit-scrollbar-track,
 .rightbar::-webkit-scrollbar-track {
     margin: var(--radius) 0;
+}
+
+.shelf::-webkit-scrollbar-track {
+    margin: 0.25rem 0;
+}
+
+/* the sidebar is the narrowest column there is, and the list inside it is short
+   rows: a full-width bar would take more from them than it tells them. it is cut
+   to a hairline, and the rows keep the width. */
+.shelf::-webkit-scrollbar {
+    width: 0.3125rem;
+}
+
+.shelf::-webkit-scrollbar-thumb {
+    border-width: 1px;
 }
 
 .search-body::-webkit-scrollbar-track,
@@ -1353,7 +1458,7 @@ button {
     margin: 0.625rem 0;
 }
 
-.sidebar::-webkit-scrollbar-thumb,
+.shelf::-webkit-scrollbar-thumb,
 .main::-webkit-scrollbar-thumb,
 .rightbar::-webkit-scrollbar-thumb,
 .search-body::-webkit-scrollbar-thumb,
@@ -1365,7 +1470,7 @@ button {
     transition: background-color var(--mid) ease;
 }
 
-.sidebar:hover::-webkit-scrollbar-thumb,
+.sidebar:hover .shelf::-webkit-scrollbar-thumb,
 .main:hover::-webkit-scrollbar-thumb,
 .rightbar:hover::-webkit-scrollbar-thumb,
 .search-body:hover::-webkit-scrollbar-thumb,
@@ -1380,6 +1485,11 @@ button {
     align-items: center;
     gap: 0.125rem;
     padding-right: 0.125rem;
+}
+
+/* it heads a second list further down, so it needs air above it */
+.playlists-label {
+    margin-top: 0.875rem;
 }
 
 /* anchored to the viewport, so the sidebar's overflow cannot clip it */
@@ -1482,6 +1592,22 @@ button {
 
 .dialog input:focus {
     box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.dialog .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    color: var(--text-dim);
+    font-size: 0.6875rem;
+    font-weight: 550;
+}
+
+/* the input takes its font from the page, not from the label wrapped around it */
+.dialog .field input {
+    color: var(--text);
+    font-size: 0.875rem;
+    font-weight: 450;
 }
 
 .dialog-actions {
@@ -1678,6 +1804,61 @@ button {
     }
 }
 
+/* the row that says what the list below holds. nothing lit is the plain list of
+   playlists, and each chip stands for itself. */
+.shelf-chips {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    gap: 0.25rem;
+    margin-bottom: 0.375rem;
+    padding: 0 0.125rem 0.125rem;
+    /* the sidebar goes as narrow as 9rem, so the row scrolls rather than wraps */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+}
+
+.shelf-chips::-webkit-scrollbar {
+    display: none;
+}
+
+.chip {
+    flex: none;
+    padding: 0.25rem 0.6875rem;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    background: var(--glass-inset);
+    box-shadow: inset 0 1px 0 var(--specular);
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        background var(--fast) ease,
+        border-color var(--fast) ease,
+        color var(--fast) ease,
+        transform var(--fast) var(--spring);
+}
+
+.chip:hover:not(.on) {
+    color: var(--text);
+    background: var(--hover);
+}
+
+.chip:active {
+    transform: scale(0.94);
+}
+
+.chip.on {
+    border-color: transparent;
+    background: var(--accent);
+    box-shadow: 0 0.375rem 1rem -0.5rem var(--accent-glow);
+    color: var(--void);
+}
+
 /* ---------- library view modes ---------- */
 
 .playlist-item.compact {
@@ -1755,6 +1936,12 @@ button {
     object-fit: cover;
 }
 
+/* an artist is a face rather than a sleeve, the same as in the main grid */
+.playlist-cover.round,
+.tile-cover.round {
+    border-radius: 50%;
+}
+
 .tile-name {
     display: flex;
     align-items: center;
@@ -1774,16 +1961,11 @@ button {
 
 .brand .collapse {
     margin-left: auto;
-    opacity: 0;
-    transform: translateX(-0.25rem);
-    transition:
-        opacity var(--mid) ease,
-        transform var(--mid) var(--spring);
+    transition: color var(--fast) ease;
 }
 
-.sidebar:hover .brand .collapse {
-    opacity: 1;
-    transform: none;
+.brand .collapse:hover {
+    color: var(--text);
 }
 
 .rail-head {
@@ -1799,6 +1981,8 @@ button {
 /* the strip that brings a hidden panel back, sitting on the frame edge */
 .edge-toggle {
     position: absolute;
+    /* it waits for the column to be most of the way shut */
+    animation: fade var(--mid) ease 0.2s both;
     top: 50%;
     z-index: 15;
     display: grid;
@@ -1816,6 +2000,14 @@ button {
 .edge-toggle:hover {
     width: 1.625rem;
     color: var(--text);
+}
+
+.edge-toggle.blocked,
+.edge-toggle.blocked:hover {
+    width: 1.25rem;
+    color: var(--text-dim);
+    opacity: 0.4;
+    cursor: default;
 }
 
 .edge-toggle.left {

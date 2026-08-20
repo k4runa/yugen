@@ -67,6 +67,17 @@ function stored_pins(): string[] {
     }
 }
 
+function stored_shelves(): Shelf[] {
+    try {
+        const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}').shelves
+        const ids = SHELVES.map((shelf) => shelf.id)
+
+        return Array.isArray(value) ? value.filter((id: Shelf) => ids.includes(id)) : []
+    } catch {
+        return []
+    }
+}
+
 function stored_number(key: string, fallback: number, [min, max]: readonly [number, number]) {
     try {
         const value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')[key]
@@ -151,10 +162,11 @@ type MenuTarget =
 
 type Menu = MenuTarget & { x: number; y: number }
 
-type Dialog = { mode: 'create'; song?: string } | { mode: 'rename'; playlist: string }
+// the only thing a dialog is still for: editing a playlist's details
+type Dialog = { playlist: string }
 
 type Sort = 'title' | 'added' | 'artist' | 'album'
-type Layout = 'list' | 'compact'
+type Layout = 'list' | 'compact' | 'grid'
 
 const SORTS: { id: Sort; label: string }[] = [
     { id: 'title', label: 'Title' },
@@ -166,7 +178,10 @@ const SORTS: { id: Sort; label: string }[] = [
 const LAYOUTS: { id: Layout; label: string }[] = [
     { id: 'list', label: 'List' },
     { id: 'compact', label: 'Compact' },
+    { id: 'grid', label: 'Grid' },
 ]
+
+type Shelf = 'playlists' | 'albums' | 'artists'
 
 type LibraryView = 'compact' | 'list' | 'compact-grid' | 'grid'
 
@@ -278,6 +293,8 @@ type Bridge = {
     get_playlists(): Promise<string[]>
     get_playlist(playlist: string): Promise<string[]>
     create_playlist(playlist: string): Promise<boolean>
+    // how many playlists exist, which is what a new one is named after
+    get_playlist_count(): Promise<number>
     delete_playlist(playlist: string): Promise<boolean>
     rename_playlist(playlist: string, renamed: string): Promise<boolean>
     add_to_playlist(playlist: string, name: string): Promise<boolean>
@@ -704,6 +721,14 @@ const ICONS = {
         'M9 7.5C11 7 13 7 15 7.5L16.4 5.6 18.6 6.6C21.4 9.4 21.9 14 20.3 17.6L18.2 20 16.6 17.8C13.6 18.9 10.4 18.9 7.4 17.8L5.8 20 3.7 17.6C2.1 14 2.6 9.4 5.4 6.6L7.6 5.6ZM9.8 13.3a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6M14.2 13.3a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6',
 }
 
+// the shelf is the sidebar's own list. it holds the playlists, and whatever else
+// is ticked keeps them company there - albums, artists, or both.
+const SHELVES: { id: Shelf; label: string; icon: string }[] = [
+    { id: 'playlists', label: 'Playlists', icon: ICONS.playlist },
+    { id: 'albums', label: 'Albums', icon: ICONS.album },
+    { id: 'artists', label: 'Artists', icon: ICONS.artist },
+]
+
 export default function App() {
     // read once, off the last tick the previous run wrote
     const saved_playback = useMemo(stored_playback, [])
@@ -757,6 +782,11 @@ export default function App() {
     const [track_layout, set_track_layout] = useState<Layout>(() =>
         stored_pref('track_layout', LAYOUTS.map((l) => l.id), 'list'),
     )
+    // liked songs carries its own choice: the two views are read differently, and
+    // this one has always opened as a wall of covers
+    const [liked_layout, set_liked_layout] = useState<Layout>(() =>
+        stored_pref('liked_layout', LAYOUTS.map((l) => l.id), 'grid'),
+    )
     const [dialog, set_dialog] = useState<Dialog | null>(null)
     const [draft, set_draft] = useState('')
 
@@ -765,6 +795,8 @@ export default function App() {
     const [pins, set_pins] = useState<string[]>(stored_pins)
 
     const [library_menu, set_library_menu] = useState<{ x: number; y: number } | null>(null)
+    // which kinds keep the playlists company in the sidebar list
+    const [shelves, set_shelves] = useState<Shelf[]>(stored_shelves)
     const [library_view, set_library_view] = useState<LibraryView>(() =>
         stored_pref('library_view', LIBRARY_VIEWS.map((o) => o.id), 'list'),
     )
@@ -784,9 +816,13 @@ export default function App() {
         latest: number
     } | null>(null)
 
-    // the sliding indicator behind whichever library row is open
+    // the sliding indicator behind whichever library row is open. the fixed rows
+    // and the scrolling list below the chips each get one: a single element cannot
+    // travel between two scroll regions without leaving one of them.
     const nav_pill = useRef<HTMLDivElement>(null)
+    const shelf_pill = useRef<HTMLDivElement>(null)
     const sidebar_ref = useRef<HTMLElement>(null)
+    const shelf_ref = useRef<HTMLDivElement>(null)
 
     const [query, set_query] = useState('')
     const [searching, set_searching] = useState(false)
@@ -804,7 +840,9 @@ export default function App() {
     // switching tabs mid-flight leaves an answer in the air, and it must not land
     // on top of the newer one
     const search_run = useRef(0)
-    const [downloading, set_downloading] = useState<string | null>(null)
+    // the refs currently being fetched: several at once is fine, and a row only
+    // answers for itself
+    const [downloading, set_downloading] = useState<string[]>([])
     const [source, set_source] = useState<Source>('yt')
     const [search_open, set_search_open] = useState(false)
 
@@ -1185,12 +1223,36 @@ export default function App() {
         }
     }
 
-    async function create_playlist(name: string) {
-        const trimmed = name.trim()
-        if (!trimmed) return
+    // the backend counts the playlists, and the new one is named after that count.
+    // a name already on the list means the count has been reused, so walk past it.
+    async function next_playlist_name() {
+        const taken = new Set(Object.keys(playlists))
 
-        await bridge().create_playlist(trimmed)
+        let count = taken.size
+
+        try {
+            count = await bridge().get_playlist_count()
+        } catch {
+            // the count is not exposed yet: the sidebar knows the same number
+        }
+
+        let name = `Playlist ${count}`
+        while (taken.has(name)) name = `Playlist ${++count}`
+
+        return name
+    }
+
+    // making one is not worth a question. it gets a name, it opens as if it had
+    // been clicked, and the header's pencil is where a better name goes.
+    async function new_playlist(song?: string) {
+        const name = await next_playlist_name()
+
+        await bridge().create_playlist(name)
+        // started from a track: the point was to put that track somewhere new
+        if (song) await bridge().add_to_playlist(name, song)
+
         await sync_playlists()
+        open_playlist(name)
     }
 
     function toggle_pin(name: string) {
@@ -1411,19 +1473,25 @@ export default function App() {
         }
     }
 
+    // every binding runs on a thread of its own, so downloads do not have to take
+    // turns: only the row being fetched is held, and the rest of the list stays live
     async function download(result: SearchResult) {
-        // the button is disabled for both of these, but the click is not the only
+        // the row is disabled for both of these, but the click is not the only
         // way in and yt-dlp would happily fetch a second copy
-        if (downloading || owns(result)) return
+        if (downloading.includes(result.ref) || owns(result)) return
 
-        set_downloading(result.ref)
+        set_downloading((busy) => [...busy, result.ref])
 
-        const dir = await music_dir()
+        try {
+            const dir = await music_dir()
 
-        if (source === 'yt') await bridge().download_yt(result.ref, dir)
-        else await bridge().download_sc(result.ref, dir)
+            if (source === 'yt') await bridge().download_yt(result.ref, dir)
+            else await bridge().download_sc(result.ref, dir)
+        } finally {
+            // a failed fetch has to let go of the row too, or it never comes back
+            set_downloading((busy) => busy.filter((ref) => ref !== result.ref))
+        }
 
-        set_downloading(null)
         await fetch_songs()
         await sync_liked()
     }
@@ -1468,21 +1536,20 @@ export default function App() {
     const liked_songs = songs.filter((name) => liked.has(name))
     const groups = view === 'albums' ? albums : view === 'artists' ? artists : null
 
+    // newest first for dates, alphabetical for the rest
+    const by_sort = (a: string, b: string) =>
+        sort === 'added'
+            ? added_of(b) - added_of(a)
+            : sort === 'artist'
+              ? artist_of(a).localeCompare(artist_of(b))
+              : sort === 'album'
+                ? album_of(a).localeCompare(album_of(b))
+                : title_of(a).localeCompare(title_of(b))
+
     // a playlist only lists what is still on disk
     const playlist_songs =
         view === 'playlist' && selection
-            ? (playlists[selection] ?? [])
-                  .filter((name) => songs.includes(name))
-                  .sort((a, b) =>
-                      // newest first for dates, alphabetical for the rest
-                      sort === 'added'
-                          ? added_of(b) - added_of(a)
-                          : sort === 'artist'
-                            ? artist_of(a).localeCompare(artist_of(b))
-                            : sort === 'album'
-                              ? album_of(a).localeCompare(album_of(b))
-                              : title_of(a).localeCompare(title_of(b)),
-                  )
+            ? (playlists[selection] ?? []).filter((name) => songs.includes(name)).sort(by_sort)
             : []
 
     // the current queue: what prev/next walks through
@@ -1492,8 +1559,23 @@ export default function App() {
             : selection
               ? (groups?.get(selection) ?? [])
               : view === 'liked'
-                ? liked_songs
+                ? [...liked_songs].sort(by_sort)
                 : songs
+
+    // sorting and layout are offered on the two views that are a plain track list
+    // the user arranges: their own playlists, and the songs they liked
+    const tunable = view === 'playlist' || view === 'liked'
+    const layout = view === 'liked' ? liked_layout : track_layout
+
+    function choose_layout(next: Layout) {
+        if (view === 'liked') {
+            set_liked_layout(next)
+            save_pref('liked_layout', next)
+        } else {
+            set_track_layout(next)
+            save_pref('track_layout', next)
+        }
+    }
 
     // prev/next walk the shuffled order when shuffle is on, otherwise the view order
     const listed_key = listed.join('\u0000')
@@ -1700,6 +1782,7 @@ export default function App() {
         e.preventDefault()
         e.currentTarget.setPointerCapture(e.pointerId)
         e.currentTarget.classList.add('active')
+        frame.current?.classList.add('resizing')
 
         // the css clamp can be holding the column off its stored share, so start from
         // where the handle actually sits rather than from the stored number
@@ -1744,6 +1827,7 @@ export default function App() {
         const drag = resizing.current
 
         e.currentTarget.classList.remove('active')
+        frame.current?.classList.remove('resizing')
         resizing.current = null
 
         if (!drag) return
@@ -1775,7 +1859,7 @@ export default function App() {
     const song_context = (name: string) => context({ kind: 'song', song: name })
 
     function open_dialog(next: Dialog) {
-        set_draft(next.mode === 'rename' ? next.playlist : '')
+        set_draft(next.playlist)
         set_dialog(next)
     }
 
@@ -1783,13 +1867,7 @@ export default function App() {
         if (!dialog) return
 
         set_dialog(null)
-
-        if (dialog.mode === 'rename') return rename_playlist(dialog.playlist, draft)
-
-        await create_playlist(draft)
-
-        // opened from a track: the point was to put that track somewhere new
-        if (dialog.song) await add_to_playlist(draft.trim(), dialog.song)
+        await rename_playlist(dialog.playlist, draft)
     }
 
     // local wrappers so call sites stay short
@@ -1805,6 +1883,77 @@ export default function App() {
             size={size}
         />
     )
+
+    // one search result. a download holds nothing but its own row, and 'held' is
+    // marked with aria-disabled rather than the attribute: the tooltip is
+    // delegated off pointer events, and a disabled button emits none of them
+    function search_row(result: SearchResult) {
+        const busy = downloading.includes(result.ref)
+        const held = busy || owns(result)
+
+        return (
+            <button
+                key={result.ref}
+                className={`result${owns(result) ? ' owned' : ''}${busy ? ' busy' : ''}`}
+                {...tip(
+                    owns(result)
+                        ? 'Already in your library'
+                        : busy
+                          ? 'Downloading...'
+                          : 'Download',
+                )}
+                aria-disabled={held}
+                onClick={() => !held && download(result)}
+            >
+                {artwork(result) ? (
+                    <img src={artwork(result)} alt='' />
+                ) : (
+                    <div className='placeholder'>♪</div>
+                )}
+                <div className='result-meta'>
+                    <div className='name ellipsis'>{result.title}</div>
+                    <div className='muted'>
+                        {owns(result)
+                            ? 'In your library'
+                            : busy
+                              ? 'Downloading...'
+                              : source === 'yt'
+                                ? 'youtube'
+                                : 'soundcloud'}
+                    </div>
+                </div>
+                {owns(result) ? (
+                    <Icon d={ICONS.check} size={15} />
+                ) : busy ? (
+                    <span className='spinner' />
+                ) : (
+                    <Icon d={ICONS.download} size={15} />
+                )}
+            </button>
+        )
+    }
+
+    // the cover wall: what the library opens as, and what 'grid' picks elsewhere
+    function track_cards(names: string[]) {
+        return (
+            <section className='card-row'>
+                {names.map((name, i) => (
+                    <div
+                        key={name}
+                        className='album'
+                        style={{ '--i': i } as React.CSSProperties}
+                        onClick={() => play_music(name)}
+                        onContextMenu={song_context(name)}
+                    >
+                        {cover(name, 'album-cover')}
+                        {heart(name)}
+                        <div className='title ellipsis'>{title_of(name)}</div>
+                        <div className='muted ellipsis'>{artist_of(name)}</div>
+                    </div>
+                ))}
+            </section>
+        )
+    }
 
     function track_rows(names: string[]) {
         return (
@@ -1896,50 +2045,124 @@ export default function App() {
         return rank(a) !== rank(b) ? rank(a) - rank(b) : a.localeCompare(b)
     })
 
-    // the pill is one element that travels between rows, so the selection reads as a
-    // single object moving rather than two highlights blinking
-    useLayoutEffect(() => {
-        const pill = nav_pill.current
-        const host = sidebar_ref.current
-        if (!pill || !host) return
-
-        const active = host.querySelector<HTMLElement>('.nav-item.active')
-
-        if (!active) {
-            pill.style.opacity = '0'
-            return
-        }
-
-        const place = () => {
-            // both are measured against the same origin, so the difference cancels
-            // out whatever the border contributes to offsetTop
-            pill.style.transform = `translateY(${active.offsetTop - pill.offsetTop}px)`
-            pill.style.height = `${active.offsetHeight}px`
-            pill.style.opacity = '1'
-        }
-
-        // nothing to travel from on the first paint, so that one lands without the slide
-        if (pill.style.opacity !== '1') {
-            pill.style.transition = 'none'
-            place()
-            void pill.offsetHeight
-            pill.style.transition = ''
-        } else {
-            place()
-        }
-
-        const observer = new ResizeObserver(place)
-
-        observer.observe(host)
-        observer.observe(active)
-
-        return () => observer.disconnect()
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- the names stand in for the rows
-    }, [view, selection, library_view, sidebar_open, playlist_names.join('\u0000')])
-
     // a playlist shows the cover of the first track that has one
     const playlist_cover = (name: string) =>
         (playlists[name] ?? []).find((track) => cover_of(track))
+
+    // nothing ticked is the list this section has always been: playlists alone
+    const shelved = shelves.length ? shelves : (['playlists'] as Shelf[])
+
+    // a chip stands for itself: picking albums shows the albums, and letting the
+    // last one go falls back to the plain list of playlists
+    function toggle_shelf(id: Shelf) {
+        const next = shelves.includes(id)
+            ? shelves.filter((shelf) => shelf !== id)
+            : [...shelves, id]
+
+        set_shelves(next)
+        save_pref('shelves', next)
+    }
+
+    // an album and a playlist can share a name, so a row is only itself with its
+    // kind alongside - which is also what the click and the highlight go by
+    type Row = { kind: Shelf; name: string; count: number; art?: string; pinned: boolean }
+
+    const grouped_rows = (kind: Shelf, groups: Map<string, string[]>): Row[] =>
+        [...groups]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([name, tracks]) => ({
+                kind,
+                name,
+                count: tracks.length,
+                art: tracks.find((track) => cover_of(track)),
+                pinned: false,
+            }))
+
+    const rows: Row[] = [
+        ...(shelved.includes('playlists')
+            ? playlist_names.map((name) => ({
+                  kind: 'playlists' as const,
+                  name,
+                  count: playlists[name].length,
+                  art: playlist_cover(name),
+                  pinned: pins.includes(name),
+              }))
+            : []),
+        ...(shelved.includes('albums') ? grouped_rows('albums', albums) : []),
+        ...(shelved.includes('artists') ? grouped_rows('artists', artists) : []),
+    ]
+
+    function open_row(row: Row) {
+        if (row.kind === 'playlists') return open_playlist(row.name)
+
+        // albums and artists are grouped views with one group picked out
+        set_view(row.kind)
+        set_selection(row.name)
+    }
+
+    const row_active = (row: Row) =>
+        selection === row.name && view === (row.kind === 'playlists' ? 'playlist' : row.kind)
+
+    // the rows stand in for themselves: what the pill has to re-measure against is
+    // which of them are on the list, and in what order
+    const rows_key = rows.map((row) => `${row.kind}:${row.name}`).join('\u0000')
+
+    // a pill travels between the rows of its own region, so the selection reads as a
+    // single object moving rather than two highlights blinking
+    useLayoutEffect(() => {
+        const host = sidebar_ref.current
+        if (!host) return
+
+        const regions = [
+            // the library rows sit above the chips and never scroll
+            {
+                pill: nav_pill.current,
+                active: host.querySelector<HTMLElement>('.nav-item.active:not(.playlist-item)'),
+            },
+            {
+                pill: shelf_pill.current,
+                active: shelf_ref.current?.querySelector<HTMLElement>('.nav-item.active'),
+            },
+        ]
+
+        const observers: ResizeObserver[] = []
+
+        for (const { pill, active } of regions) {
+            if (!pill) continue
+
+            if (!active) {
+                pill.style.opacity = '0'
+                continue
+            }
+
+            const place = () => {
+                // both are measured against the same origin, so the difference cancels
+                // out whatever the border contributes to offsetTop
+                pill.style.transform = `translateY(${active.offsetTop - pill.offsetTop}px)`
+                pill.style.height = `${active.offsetHeight}px`
+                pill.style.opacity = '1'
+            }
+
+            // nothing to travel from on the first paint, so that one lands without the slide
+            if (pill.style.opacity !== '1') {
+                pill.style.transition = 'none'
+                place()
+                void pill.offsetHeight
+                pill.style.transition = ''
+            } else {
+                place()
+            }
+
+            const observer = new ResizeObserver(place)
+
+            observer.observe(host)
+            observer.observe(active)
+            observers.push(observer)
+        }
+
+        return () => observers.forEach((observer) => observer.disconnect())
+    }, [view, selection, library_view, sidebar_open, rows_key])
+
     // no room on the right half of the window, so the submenu opens leftwards there
     const flip = !!menu && menu.x > window.innerWidth / 2
     const next_theme: Theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
@@ -1982,7 +2205,9 @@ export default function App() {
     // around it, so scrollIntoView is not an option here
     useEffect(() => {
         const box = lyric_box.current
-        if (!box || line_now < 0) return
+        // the panel stays in the dom while hidden, and centring a line nobody can
+        // see is layout work for nothing - it catches up when the rail comes back
+        if (!box || line_now < 0 || !rail_open) return
 
         const line = box.children[line_now] as HTMLElement | undefined
         if (!line) return
@@ -1991,7 +2216,7 @@ export default function App() {
             top: line.offsetTop - box.clientHeight / 2 + line.offsetHeight / 2,
             behavior: 'smooth',
         })
-    }, [line_now])
+    }, [line_now, rail_open])
 
     async function seek_to(seconds: number) {
         await bridge().seek(seconds)
@@ -2021,136 +2246,181 @@ export default function App() {
                 ref={frame}
                 style={{
                     gridTemplateColumns: [
-                        sidebar_open && column(SIDEBAR_BOUNDS, sidebar_w),
+                        sidebar_open ? column(SIDEBAR_BOUNDS, sidebar_w) : '0rem',
                         '1fr',
-                        rail_open && column(RAIL_BOUNDS, rail_w),
-                    ]
-                        .filter(Boolean)
-                        .join(' '),
+                        rail_open ? column(RAIL_BOUNDS, rail_w) : '0rem',
+                    ].join(' '),
                 }}
             >
-                {sidebar_open && (
-                    <aside
-                        className='sidebar'
-                        ref={sidebar_ref}
-                        onContextMenu={context({ kind: 'sidebar' })}
-                    >
-                        <div className='nav-pill' ref={nav_pill} aria-hidden />
+                <aside
+                    className={`sidebar${sidebar_open ? '' : ' collapsed'}`}
+                    ref={sidebar_ref}
+                    inert={!sidebar_open}
+                    onContextMenu={context({ kind: 'sidebar' })}
+                >
+                    <div className='nav-pill' ref={nav_pill} aria-hidden />
 
-                        <div className='brand'>
-                            <span className='brand-mark'>
-                                <i />
-                                <i />
-                                <i />
-                            </span>
-                            yugen
+                    <div className='brand'>
+                        <span className='brand-mark'>
+                            <i />
+                            <i />
+                            <i />
+                        </span>
+                        yugen
+                        <button
+                            className='icon-btn tiny collapse'
+                            {...tip('Hide sidebar')}
+                            onClick={toggle_sidebar}
+                        >
+                            <Icon d={ICONS.back} size={16} />
+                        </button>
+                    </div>
+
+                    <div className='nav-label'>Your Library</div>
+
+                    {NAV.map((item) => (
+                        <button
+                            key={item.id}
+                            className={`nav-item${
+                                view === item.id &&
+                                !(selection && shelved.includes(item.id as Shelf))
+                                    ? ' active'
+                                    : ''
+                            }`}
+                            onClick={() => open_view(item.id)}
+                        >
+                            <Icon d={item.icon} />
+                            {item.label}
+                            <span className='nav-count'>{item.count}</span>
+                        </button>
+                    ))}
+
+                    <div className='nav-label library-label playlists-label'>
+                        Playlists
+                        <button
+                            className={`icon-btn tiny${library_menu ? ' on' : ''}`}
+                            {...tip('View as')}
+                            onClick={(e) => {
+                                e.stopPropagation()
+
+                                // the sidebar clips its overflow, so this one floats free
+                                const rect = e.currentTarget.getBoundingClientRect()
+
+                                set_library_menu(
+                                    library_menu
+                                        ? null
+                                        : {
+                                              x: Math.min(rect.left, window.innerWidth - 200),
+                                              y: rect.bottom + 6,
+                                          },
+                                )
+                            }}
+                        >
+                            <Icon d={ICONS.filter} size={14} />
+                        </button>
+                    </div>
+
+                    <div className='shelf-chips'>
+                        {SHELVES.map((option) => (
                             <button
-                                className='icon-btn tiny collapse'
-                                {...tip('Hide sidebar')}
-                                onClick={toggle_sidebar}
+                                key={option.id}
+                                className={`chip${shelves.includes(option.id) ? ' on' : ''}`}
+                                onClick={() => toggle_shelf(option.id)}
                             >
-                                <Icon d={ICONS.back} size={16} />
-                            </button>
-                        </div>
-
-                        <div className='nav-label library-label'>
-                            Your Library
-                            <button
-                                className={`icon-btn tiny${library_menu ? ' on' : ''}`}
-                                {...tip('View as')}
-                                onClick={(e) => {
-                                    e.stopPropagation()
-
-                                    // the sidebar clips its overflow, so this one floats free
-                                    const rect = e.currentTarget.getBoundingClientRect()
-
-                                    set_library_menu(
-                                        library_menu
-                                            ? null
-                                            : {
-                                                  x: Math.min(rect.left, window.innerWidth - 200),
-                                                  y: rect.bottom + 6,
-                                              },
-                                    )
-                                }}
-                            >
-                                <Icon d={ICONS.filter} size={14} />
-                            </button>
-                        </div>
-
-                        {NAV.map((item) => (
-                            <button
-                                key={item.id}
-                                className={`nav-item${view === item.id ? ' active' : ''}`}
-                                onClick={() => open_view(item.id)}
-                            >
-                                <Icon d={item.icon} />
-                                {item.label}
-                                <span className='nav-count'>{item.count}</span>
+                                {option.label}
                             </button>
                         ))}
+                    </div>
 
-                        {playlist_names.length ? (
+                    {/* only this scrolls: the brand, the library rows and the chips
+                        stay put however long the list gets */}
+                    <div className='shelf' ref={shelf_ref}>
+                        <div className='nav-pill' ref={shelf_pill} aria-hidden />
+
+                        {rows.length ? (
                             library_view === 'compact-grid' || library_view === 'grid' ? (
                                 <div className={`playlist-grid ${library_view}`}>
-                                    {playlist_names.map((name) => (
+                                    {rows.map((row) => (
                                         <button
-                                            key={name}
-                                            className={`tile${
-                                                view === 'playlist' && selection === name ? ' active' : ''
-                                            }`}
-                                            {...tip(name)}
-                                            onClick={() => open_playlist(name)}
-                                            onContextMenu={context({ kind: 'playlist', playlist: name })}
+                                            key={`${row.kind}:${row.name}`}
+                                            className={`tile${row_active(row) ? ' active' : ''}`}
+                                            {...tip(row.name)}
+                                            onClick={() => open_row(row)}
+                                            onContextMenu={
+                                                row.kind === 'playlists'
+                                                    ? context({ kind: 'playlist', playlist: row.name })
+                                                    : undefined
+                                            }
                                         >
-                                            {cover(playlist_cover(name) ?? '', 'tile-cover')}
+                                            {cover(
+                                                row.art ?? '',
+                                                `tile-cover${row.kind === 'artists' ? ' round' : ''}`,
+                                            )}
                                             <div className='tile-name ellipsis'>
-                                                {pins.includes(name) && (
+                                                {row.pinned && (
                                                     <span className='pinned' {...tip('Pinned')}>
                                                         <Icon d={ICONS.pin} size={12} fill />
                                                     </span>
                                                 )}
-                                                {name}
+                                                {row.name}
                                             </div>
                                         </button>
                                     ))}
                                 </div>
                             ) : (
-                                playlist_names.map((name) => (
+                                rows.map((row) => (
                                     <button
-                                        key={name}
+                                        key={`${row.kind}:${row.name}`}
                                         className={`nav-item playlist-item ${library_view}${
-                                            view === 'playlist' && selection === name ? ' active' : ''
+                                            row_active(row) ? ' active' : ''
                                         }`}
-                                        onClick={() => open_playlist(name)}
-                                        onContextMenu={context({ kind: 'playlist', playlist: name })}
+                                        onClick={() => open_row(row)}
+                                        onContextMenu={
+                                            row.kind === 'playlists'
+                                                ? context({ kind: 'playlist', playlist: row.name })
+                                                : undefined
+                                        }
                                     >
-                                        {pins.includes(name) ? (
+                                        {row.pinned ? (
                                             <span className='pinned' {...tip('Pinned')}>
                                                 <Icon d={ICONS.pin} size={17} fill />
                                             </span>
+                                        ) : library_view === 'list' ? (
+                                            cover(
+                                                row.art ?? '',
+                                                `playlist-cover${row.kind === 'artists' ? ' round' : ''}`,
+                                            )
                                         ) : (
-                                            // compact is text only
-                                            library_view === 'list' &&
-                                            cover(playlist_cover(name) ?? '', 'playlist-cover')
+                                            // compact is text only, but a list holding more
+                                            // than playlists has to say which is which
+                                            row.kind !== 'playlists' && (
+                                                <Icon
+                                                    d={row.kind === 'albums' ? ICONS.album : ICONS.artist}
+                                                    size={15}
+                                                />
+                                            )
                                         )}
-                                        <span className='ellipsis'>{name}</span>
-                                        <span className='nav-count'>{playlists[name].length}</span>
+                                        <span className='ellipsis'>{row.name}</span>
+                                        <span className='nav-count'>{row.count}</span>
                                     </button>
                                 ))
                             )
                         ) : (
-                            <p className='nav-hint'>Right-click here to add one.</p>
+                            <p className='nav-hint'>
+                                {shelves.length && !shelves.includes('playlists')
+                                    ? 'Nothing to show here yet.'
+                                    : 'Right-click here to add one.'}
+                            </p>
                         )}
+                    </div>
 
-                        <div className='sidebar-foot'>
-                            <button className='pill-btn' onClick={fetch_songs} disabled={loading}>
-                                <Icon d={ICONS.refresh} size={15} />
-                                {loading ? 'Scanning...' : 'Refresh library'}
-                            </button>
-                        </div>
-                    </aside>
-                )}
+                    <div className='sidebar-foot'>
+                        <button className='pill-btn' onClick={fetch_songs} disabled={loading}>
+                            <Icon d={ICONS.refresh} size={15} />
+                            {loading ? 'Scanning...' : 'Refresh library'}
+                        </button>
+                    </div>
+                </aside>
 
                 <main className='main'>
                     <div className='topbar'>
@@ -2229,48 +2499,7 @@ export default function App() {
                                             )}
 
                                             {!searching &&
-                                                results.slice(0, shown).map((result) => (
-                                                    <button
-                                                        key={result.ref}
-                                                        className={`result${owns(result) ? ' owned' : ''}`}
-                                                        {...tip(
-                                                            owns(result)
-                                                                ? 'Already in your library'
-                                                                : 'Download',
-                                                        )}
-                                                        onClick={() => download(result)}
-                                                        disabled={
-                                                            downloading !== null || owns(result)
-                                                        }
-                                                    >
-                                                        {artwork(result) ? (
-                                                            <img src={artwork(result)} alt='' />
-                                                        ) : (
-                                                            <div className='placeholder'>♪</div>
-                                                        )}
-                                                        <div className='result-meta'>
-                                                            <div className='name ellipsis'>
-                                                                {result.title}
-                                                            </div>
-                                                            <div className='muted'>
-                                                                {owns(result)
-                                                                    ? 'In your library'
-                                                                    : downloading === result.ref
-                                                                      ? 'Downloading...'
-                                                                      : source === 'yt'
-                                                                        ? 'youtube'
-                                                                        : 'soundcloud'}
-                                                            </div>
-                                                        </div>
-                                                        {owns(result) ? (
-                                                            <Icon d={ICONS.check} size={15} />
-                                                        ) : downloading === result.ref ? (
-                                                            <span className='spinner' />
-                                                        ) : (
-                                                            <Icon d={ICONS.download} size={15} />
-                                                        )}
-                                                    </button>
-                                                ))}
+                                                results.slice(0, shown).map(search_row)}
 
                                             {!searching && results.length > shown && (
                                                 <button
@@ -2341,14 +2570,27 @@ export default function App() {
                                 <Icon d={ICONS.back} size={17} />
                             </button>
                         )}
-                        <h2 className='section-title ellipsis'>{view_title}</h2>
+                        {view === 'playlist' && selection ? (
+                            <div className='title-edit'>
+                                <h2 className='section-title ellipsis'>{view_title}</h2>
+                                <button
+                                    className='icon-btn tiny edit'
+                                    {...tip('Edit details')}
+                                    onClick={() => open_dialog({ playlist: selection })}
+                                >
+                                    <Icon d={ICONS.rename} size={14} />
+                                </button>
+                            </div>
+                        ) : (
+                            <h2 className='section-title ellipsis'>{view_title}</h2>
+                        )}
                         <span className='muted'>
                             {groups && !selection
                                 ? `${groups.size} ${view === 'albums' ? 'albums' : 'artists'}`
                                 : `${listed.length} tracks`}
                         </span>
 
-                        {view === 'playlist' && (
+                        {tunable && (
                             <div className='filter-wrap'>
                                 <button
                                     className={`icon-btn filter${filters ? ' on' : ''}`}
@@ -2383,13 +2625,10 @@ export default function App() {
                                         {LAYOUTS.map((option) => (
                                             <button
                                                 key={option.id}
-                                                onClick={() => {
-                                                    set_track_layout(option.id)
-                                                    save_pref('track_layout', option.id)
-                                                }}
+                                                onClick={() => choose_layout(option.id)}
                                             >
                                                 <span className='ellipsis'>{option.label}</span>
-                                                {track_layout === option.id && (
+                                                {layout === option.id && (
                                                     <Icon d={ICONS.check} size={14} />
                                                 )}
                                             </button>
@@ -2407,29 +2646,19 @@ export default function App() {
                             <p className='empty'>Nothing to group yet.</p>
                         )
                     ) : listed.length ? (
-                        selection ? (
-                            view === 'playlist' && track_layout === 'list' ? (
+                        // only the two views that carry the menu answer to a layout
+                        tunable ? (
+                            layout === 'list' ? (
                                 track_list(listed)
-                            ) : (
+                            ) : layout === 'compact' ? (
                                 track_rows(listed)
+                            ) : (
+                                track_cards(listed)
                             )
+                        ) : selection ? (
+                            track_rows(listed)
                         ) : (
-                            <section className='card-row'>
-                                {listed.map((name, i) => (
-                                    <div
-                                        key={name}
-                                        className='album'
-                                        style={{ '--i': i } as React.CSSProperties}
-                                        onClick={() => play_music(name)}
-                                        onContextMenu={song_context(name)}
-                                    >
-                                        {cover(name, 'album-cover')}
-                                        {heart(name)}
-                                        <div className='title ellipsis'>{title_of(name)}</div>
-                                        <div className='muted ellipsis'>{artist_of(name)}</div>
-                                    </div>
-                                ))}
-                            </section>
+                            track_cards(listed)
                         )
                     ) : (
                         <p className='empty'>
@@ -2446,77 +2675,75 @@ export default function App() {
                     )}
                 </main>
 
-                {rail_open && (
-                    <aside className='rightbar'>
-                        <div className='rail-head'>
-                            <button className='icon-btn tiny' {...tip('Hide panel')} onClick={toggle_rail}>
-                                <Icon d={ICONS.chevron} size={16} />
-                            </button>
-                        </div>
+                <aside className={`rightbar${rail_open ? '' : ' collapsed'}`} inert={!rail_open}>
+                    <div className='rail-head'>
+                        <button className='icon-btn tiny' {...tip('Hide panel')} onClick={toggle_rail}>
+                            <Icon d={ICONS.chevron} size={16} />
+                        </button>
+                    </div>
 
-                        {current && (
-                            <section className='lyrics'>
-                                <div className='lyric-head'>
-                                    <h2 className='section-title'>Lyrics</h2>
-                                    {/* without stamps there is no line to follow and
-                                        nothing to jump to, which is worth saying */}
-                                    {sheet && !timed && <span className='muted'>Not synced</span>}
+                    {current && (
+                        <section className='lyrics'>
+                            <div className='lyric-head'>
+                                <h2 className='section-title'>Lyrics</h2>
+                                {/* without stamps there is no line to follow and
+                                    nothing to jump to, which is worth saying */}
+                                {sheet && !timed && <span className='muted'>Not synced</span>}
+                            </div>
+
+                            {timed ? (
+                                <div className='lyric-lines' ref={lyric_box}>
+                                    {timed.map((line, i) => (
+                                        <button
+                                            key={`${line.at}-${i}`}
+                                            className={`lyric${
+                                                i === line_now
+                                                    ? ' now'
+                                                    : Math.abs(i - line_now) === 1
+                                                      ? ' near'
+                                                      : ''
+                                            }${line.text ? '' : ' rest'}`}
+                                            {...tip('Jump to this line')}
+                                            onClick={() => seek_to(line.at)}
+                                        >
+                                            {line.text || '♪'}
+                                        </button>
+                                    ))}
                                 </div>
+                            ) : sheet ? (
+                                // plain lyrics carry no timing, so there is nothing to
+                                // follow along with and nothing to click
+                                <p className='lyric-plain'>{sheet}</p>
+                            ) : (
+                                <p className='muted lyric-empty'>
+                                    {awaiting_lyrics
+                                        ? 'Looking for lyrics...'
+                                        : 'No lyrics for this track.'}
+                                </p>
+                            )}
+                        </section>
+                    )}
 
-                                {timed ? (
-                                    <div className='lyric-lines' ref={lyric_box}>
-                                        {timed.map((line, i) => (
-                                            <button
-                                                key={`${line.at}-${i}`}
-                                                className={`lyric${
-                                                    i === line_now
-                                                        ? ' now'
-                                                        : Math.abs(i - line_now) === 1
-                                                          ? ' near'
-                                                          : ''
-                                                }${line.text ? '' : ' rest'}`}
-                                                {...tip('Jump to this line')}
-                                                onClick={() => seek_to(line.at)}
-                                            >
-                                                {line.text || '♪'}
-                                            </button>
-                                        ))}
+                    {liked_songs.length > 0 && (
+                        <section>
+                            <h2 className='section-title'>Liked Songs</h2>
+                            {liked_songs.map((name) => (
+                                <button
+                                    key={name}
+                                    className='result'
+                                    onClick={() => play_music(name)}
+                                    onContextMenu={song_context(name)}
+                                >
+                                    {cover(name, '')}
+                                    <div className='result-meta'>
+                                        <div className='name ellipsis'>{title_of(name)}</div>
+                                        <div className='muted ellipsis'>{artist_of(name)}</div>
                                     </div>
-                                ) : sheet ? (
-                                    // plain lyrics carry no timing, so there is nothing to
-                                    // follow along with and nothing to click
-                                    <p className='lyric-plain'>{sheet}</p>
-                                ) : (
-                                    <p className='muted lyric-empty'>
-                                        {awaiting_lyrics
-                                            ? 'Looking for lyrics...'
-                                            : 'No lyrics for this track.'}
-                                    </p>
-                                )}
-                            </section>
-                        )}
-
-                        {liked_songs.length > 0 && (
-                            <section>
-                                <h2 className='section-title'>Liked Songs</h2>
-                                {liked_songs.map((name) => (
-                                    <button
-                                        key={name}
-                                        className='result'
-                                        onClick={() => play_music(name)}
-                                        onContextMenu={song_context(name)}
-                                    >
-                                        {cover(name, '')}
-                                        <div className='result-meta'>
-                                            <div className='name ellipsis'>{title_of(name)}</div>
-                                            <div className='muted ellipsis'>{artist_of(name)}</div>
-                                        </div>
-                                    </button>
-                                ))}
-                            </section>
-                        )}
-                    </aside>
-                )}
+                                </button>
+                            ))}
+                        </section>
+                    )}
+                </aside>
 
                 {sidebar_open && (
                     <div
@@ -2549,9 +2776,15 @@ export default function App() {
                     </button>
                 )}
 
-                {/* while cramped the rail has nowhere to go, so no handle is offered */}
-                {rail_hidden && !cramped && (
-                    <button className='edge-toggle right' {...tip('Show panel')} onClick={toggle_rail}>
+                {/* while cramped the rail has nowhere to go, but a handle that
+                    vanishes mid-drag reads as a bug: it stays put and says why */}
+                {rail_hidden && (
+                    <button
+                        className={`edge-toggle right${cramped ? ' blocked' : ''}`}
+                        {...tip(cramped ? 'No room for the panel' : 'Show panel')}
+                        aria-disabled={cramped}
+                        onClick={() => !cramped && toggle_rail()}
+                    >
                         <Icon d={ICONS.back} size={18} />
                     </button>
                 )}
@@ -2633,9 +2866,7 @@ export default function App() {
 
                                         <div className='context-sep' />
                                         <button
-                                            onClick={() =>
-                                                open_dialog({ mode: 'create', song: menu.song })
-                                            }
+                                            onClick={() => new_playlist(menu.song)}
                                         >
                                             <Icon d={ICONS.plus} size={15} />
                                             <span className='ellipsis'>New playlist</span>
@@ -2661,7 +2892,7 @@ export default function App() {
                             </button>
                             <button
                                 onClick={() =>
-                                    open_dialog({ mode: 'rename', playlist: menu.playlist })
+                                    open_dialog({ playlist: menu.playlist })
                                 }
                             >
                                 <Icon d={ICONS.rename} size={15} />
@@ -2678,7 +2909,7 @@ export default function App() {
                     )}
 
                     {menu.kind === 'sidebar' && (
-                        <button onClick={() => open_dialog({ mode: 'create' })}>
+                        <button onClick={() => new_playlist()}>
                             <Icon d={ICONS.plus} size={15} />
                             New playlist
                         </button>
@@ -2768,21 +2999,21 @@ export default function App() {
             {dialog && (
                 <div className='overlay' onClick={() => set_dialog(null)}>
                     <div className='dialog' onClick={(e) => e.stopPropagation()}>
-                        <h3>
-                            {dialog.mode === 'create'
-                                ? 'New playlist'
-                                : `Rename ${dialog.playlist}`}
-                        </h3>
-                        <input
-                            autoFocus
-                            placeholder='Playlist name'
-                            value={draft}
-                            onChange={(e) => set_draft(e.currentTarget.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') commit_dialog()
-                                if (e.key === 'Escape') set_dialog(null)
-                            }}
-                        />
+                        <h3>Edit details</h3>
+                        {/* the cover comes later, so the name is the whole form for now */}
+                        <label className='field'>
+                            Name
+                            <input
+                                autoFocus
+                                placeholder='Playlist name'
+                                value={draft}
+                                onChange={(e) => set_draft(e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') commit_dialog()
+                                    if (e.key === 'Escape') set_dialog(null)
+                                }}
+                            />
+                        </label>
                         <div className='dialog-actions'>
                             <button className='pill-btn' onClick={() => set_dialog(null)}>
                                 Cancel
@@ -2792,7 +3023,7 @@ export default function App() {
                                 onClick={commit_dialog}
                                 disabled={!draft.trim()}
                             >
-                                {dialog.mode === 'create' ? 'Create' : 'Rename'}
+                                Save
                             </button>
                         </div>
                     </div>

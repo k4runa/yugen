@@ -209,6 +209,10 @@ coco::stray start(saucer::application* app)
      expose_async(webview, "seek", [](float position) {
           sm::seek(position);
      });
+     
+     expose_async(webview, "get_playlist_count", []() {
+          return co::get_playlist_count();
+     });
 
      // polled by the ui while a track runs, so these stay synchronous and cheap
      webview->expose("get_position", []() -> float {

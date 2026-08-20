@@ -12,6 +12,15 @@ body,
   height: 100%;
 }
 
+/* the window is the app: it is exactly one screen tall and everything that
+   scrolls does so inside a panel. without this, a panel sliding a few pixels past
+   an edge on its way out hands the page a scrollbar, and that scrollbar shortens
+   the viewport enough to bring the other one along with it. */
+html,
+body {
+  overflow: hidden;
+}
+
 /* every measurement in the app is in rem, so this scales the whole ui with the window */
 html {
   font-size: clamp(15px, 0.24vw + 13.4px, 19px);
