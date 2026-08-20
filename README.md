@@ -66,8 +66,8 @@ sudo cmake --install build
 ```
 
 The music folder comes from the backend's `get_file_path` binding, which points
-at `Music/` inside the app's data directory. Playlists and liked songs live in
-`~/.config/yugen/`.
+at `~/Music` and creates it if it is not there. Playlists and liked songs live
+in `~/.config/yugen/`.
 
 ## License
 

@@ -121,7 +121,7 @@ coco::stray start(saucer::application* app)
           std::println("[ERROR] Engine init failed: {}", static_cast<int>(res));
      }
 
-     fs::create_directories(yugen::data_dir() + "/Music");
+     fs::create_directories(yugen::data_dir());
 
      window->set_title("yugen");
 
@@ -326,7 +326,12 @@ coco::stray start(saucer::application* app)
      });
 
      webview->expose("get_file_path", [] -> std::string{
-          return yugen::data_dir() + "/Music";
+          passwd* p = getpwuid(getuid());
+          if(p) {
+               fs::create_directories(std::string(p->pw_dir) + "/Music" );
+               return std::string(p->pw_dir) + "/Music";
+          }
+          return "";
      });
 
      /*
