@@ -1897,6 +1897,42 @@ button {
     font-size: 0.8125rem;
 }
 
+/* the rest of the batch is already in hand, so this only widens the slice */
+.load-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4375rem;
+    width: 100%;
+    margin-top: 0.25rem;
+    padding: 0.5rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.875rem;
+    background: var(--glass-inset);
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 550;
+    cursor: pointer;
+    transition:
+        background var(--fast) ease,
+        color var(--fast) ease,
+        transform var(--fast) var(--spring);
+}
+
+.load-more:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+.load-more:active {
+    transform: scale(0.98);
+}
+
+.load-more .muted {
+    font-size: 0.6875rem;
+}
+
 /* ---------- lyrics ---------- */
 
 .lyrics {

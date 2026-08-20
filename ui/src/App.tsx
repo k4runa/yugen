@@ -186,6 +186,14 @@ type SearchResult = {
     thumbnail?: string
 }
 
+// one search shells out to yt-dlp once and asks for a whole batch - the backend
+// has its own floor under this - because a second search costs another subprocess
+// while slicing a list that is already here costs nothing
+const BATCH = 50
+// but the whole batch is not put on screen: every row holds a remote thumbnail,
+// and fifty of those live at once is what the dropdown pays for in memory
+const PAGE = 10
+
 const SOURCES: { id: Source; label: string }[] = [
     { id: 'yt', label: 'YouTube' },
     { id: 'sc', label: 'SoundCloud' },
@@ -205,7 +213,9 @@ const printed = (value?: string) => (value && value !== 'NA' ? value : undefined
 async function run_search(on: Source, query: string): Promise<SearchResult[]> {
     try {
         const flat =
-            on === 'yt' ? await bridge().search_yt(query, 10) : await bridge().search_sc(query, 10)
+            on === 'yt'
+                ? await bridge().search_yt(query, BATCH)
+                : await bridge().search_sc(query, BATCH)
 
         const { fields, ref } = SHAPE[on]
 
@@ -781,6 +791,9 @@ export default function App() {
     const [query, set_query] = useState('')
     const [searching, set_searching] = useState(false)
     const [results, set_results] = useState<SearchResult[]>([])
+    // how much of the answer is on screen - every list that arrives starts at one
+    // page, and 'load more' walks it up from there
+    const [shown, set_shown] = useState(PAGE)
     // a search shells out to yt-dlp, and the two sources are tabs over the same
     // query - flipping between them should not pay for it twice. the request is
     // held alongside its answer so a tab left and returned to before it lands
@@ -1334,11 +1347,13 @@ export default function App() {
         // blanking out on the way
         if (entry?.found) {
             set_results(entry.found)
+            set_shown(PAGE)
             set_searching(false)
             return
         }
 
         set_results([])
+        set_shown(PAGE)
         set_searching(true)
 
         const pending = entry?.pending ?? run_search(on, wanted)
@@ -1358,6 +1373,7 @@ export default function App() {
         if (run !== search_run.current) return
 
         set_results(found)
+        set_shown(PAGE)
         set_searching(false)
     }
 
@@ -1389,7 +1405,10 @@ export default function App() {
         set_source(next)
 
         if (query.trim()) search(next)
-        else set_results([])
+        else {
+            set_results([])
+            set_shown(PAGE)
+        }
     }
 
     async function download(result: SearchResult) {
@@ -2167,6 +2186,7 @@ export default function App() {
                                                 e.stopPropagation()
                                                 set_query('')
                                                 set_results([])
+                                                set_shown(PAGE)
                                             }}
                                         >
                                             <Icon d={ICONS.close} size={13} />
@@ -2209,7 +2229,7 @@ export default function App() {
                                             )}
 
                                             {!searching &&
-                                                results.map((result) => (
+                                                results.slice(0, shown).map((result) => (
                                                     <button
                                                         key={result.ref}
                                                         className={`result${owns(result) ? ' owned' : ''}`}
@@ -2251,6 +2271,20 @@ export default function App() {
                                                         )}
                                                     </button>
                                                 ))}
+
+                                            {!searching && results.length > shown && (
+                                                <button
+                                                    className='load-more'
+                                                    onClick={() =>
+                                                        set_shown((count) => count + PAGE)
+                                                    }
+                                                >
+                                                    Load more
+                                                    <span className='muted'>
+                                                        {results.length - shown} left
+                                                    </span>
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 )}

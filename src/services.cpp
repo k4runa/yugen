@@ -155,10 +155,7 @@ namespace yugen
      // to rebuild a url from the way youtube does, so the url is carried along.
      std::vector<std::string> Core::search_sound_cloud(const std::string& query, int count)
      {
-
-
           if(count < MIN_COUNT) count = MIN_COUNT; 
-
           const std::string target = "scsearch" + std::to_string(count) + ":" + query;
 
           return run_command_lines("yt-dlp " + shell_quote(target) +
