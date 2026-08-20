@@ -5,6 +5,10 @@ tracks from YouTube and SoundCloud through `yt-dlp`, keeps playlists and liked
 songs, shows synced lyrics from [lrclib](https://lrclib.net), and tints itself
 with the cover art of whatever is playing.
 
+It publishes itself over MPRIS, so the track and the transport show up wherever
+the desktop looks for a player — panels and shell dashboards, the lock screen,
+`playerctl`, and the media keys.
+
 The backend is C++ — [saucer](https://github.com/saucer/saucer) for the webview,
 [miniaudio](https://miniaud.io) for playback, TagLib for metadata. The interface
 is React + TypeScript, built into a bundle that is baked straight into the
@@ -36,8 +40,9 @@ host is the floor for every machine that runs it.
 ## Building
 
 Needs CMake 3.10+, a C++23 compiler, `pkg-config`, Node.js, the dev packages for
-`taglib` and `libcurl`, WebKitGTK, and `yt-dlp` + `ffmpeg` on `PATH`. Everything
-else is fetched by CMake.
+`taglib`, `libcurl` and `glib2` (for GDBus, which serves the MPRIS interface),
+WebKitGTK, and `yt-dlp` + `ffmpeg` on `PATH`. Everything else is fetched by
+CMake.
 
 The UI has to be built first — CMake embeds `ui/dist` when it configures and
 will not build without it:

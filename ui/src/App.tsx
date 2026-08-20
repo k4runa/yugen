@@ -275,11 +275,33 @@ type Bridge = {
     set_volume(volume: number) : Promise<void>
     load_volume() : Promise<number>
     get_file_path(): Promise<string>
+    mpris_track(
+        title: string,
+        artist: string,
+        album: string,
+        path: string,
+        cover: string,
+    ): Promise<void>
+    mpris_state(
+        playing: boolean,
+        position: number,
+        length: number,
+        volume: number,
+        can_next: boolean,
+        can_prev: boolean,
+        loop: boolean,
+        shuffle: boolean,
+    ): Promise<void>
+    mpris_seeked(position: number): Promise<void>
 }
 
 declare global {
     interface Window {
         saucer: { exposed: Bridge }
+
+        // where the backend delivers whatever the desktop asked of the mpris
+        // interface - see the mpris block in the component below
+        __yugen_mpris?: (cmd: string, arg: number) => void
     }
 }
 
@@ -290,6 +312,17 @@ const tip = (text: string) => ({ 'data-tip': text, 'aria-label': text })
 
 // saucer injects the bridge on the window at runtime
 const bridge = () => window.saucer.exposed
+
+// the mpris calls are fire and forget: a missing binding is a backend from
+// before the interface existed, and a machine with no session bus is still a
+// perfectly good music player. neither is worth breaking a render over.
+const mpris = (call: () => Promise<void>) => {
+    try {
+        void call().catch(() => {})
+    } catch {
+        // binding not exposed
+    }
+}
 
 // the music folder is the backend's to decide, so it is asked for once and kept
 // here. every call site appends a file name straight onto it, hence the slash.
@@ -1251,6 +1284,8 @@ export default function App() {
         // set it here so the bar does not snap back before the next poll
         set_position(target)
         set_seeking(null)
+
+        mpris(() => bridge().mpris_seeked(target))
     }
 
     async function nudge(seconds: number) {
@@ -1260,6 +1295,8 @@ export default function App() {
 
         set_position(target)
         await bridge().seek(target)
+
+        mpris(() => bridge().mpris_seeked(target))
     }
 
     async function toggle_pause() {
@@ -1492,6 +1529,99 @@ export default function App() {
             skip(1)
         }
     })
+
+    /*
+     * MPRIS - the interface every panel, shell dashboard, lock screen and media
+     * key on the desktop reads a player through. Nothing outside the process can
+     * see a note of what is playing without it, no matter what the window shows.
+     *
+     * The state is pushed from here rather than read out of the backend because
+     * this is where it lives: SoundManager knows a sound is loaded but not
+     * whether it is paused, and the queue, the tags and the artwork never leave
+     * this side at all. Controls come back the other way through the ref below.
+     */
+    const controls = useRef<(cmd: string, arg: number) => void>(() => {})
+
+    // rebuilt every render so the handler never reads a stale paused flag or a
+    // queue from three tracks ago
+    useEffect(() => {
+        controls.current = (cmd, arg) => {
+            if (cmd === 'playpause') toggle_pause()
+            else if (cmd === 'play' && paused) toggle_pause()
+            else if (cmd === 'pause' && !paused) toggle_pause()
+            // there is no stopped state here - a track is always cued, so the
+            // closest honest answer to Stop is a pause at the top of it
+            else if (cmd === 'stop') {
+                if (!paused) toggle_pause()
+                seek_to(0)
+            } else if (cmd === 'next') skip(1)
+            else if (cmd === 'prev') skip(-1)
+            else if (cmd === 'seek') seek_to(Math.min(Math.max(position + arg, 0), length))
+            else if (cmd === 'position') seek_to(Math.min(Math.max(arg, 0), length))
+            else if (cmd === 'volume') change_volume(arg)
+            else if (cmd === 'loop') {
+                if (arg > 0 !== looped) toggle_loop()
+            } else if (cmd === 'shuffle') set_shuffle_on(arg > 0)
+        }
+    })
+
+    useEffect(() => {
+        window.__yugen_mpris = (cmd, arg) => controls.current(cmd, arg)
+
+        return () => {
+            delete window.__yugen_mpris
+        }
+    }, [])
+
+    // the cover rides along as the base64 the page already holds, so this is
+    // kept to the track changing rather than the once a second below
+    useEffect(() => {
+        if (!current) {
+            mpris(() => bridge().mpris_track('', '', '', '', ''))
+            return
+        }
+
+        const name = current
+        let cancelled = false
+
+        void (async () => {
+            const path = (await music_dir()) + name
+            if (cancelled) return
+
+            mpris(() =>
+                bridge().mpris_track(
+                    title_of(name),
+                    artist_of(name),
+                    album_of(name),
+                    path,
+                    covers_map[name] ?? '',
+                ),
+            )
+        })()
+
+        return () => {
+            cancelled = true
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- metadata_map feeds the three tags
+    }, [current, metadata_map, covers_map])
+
+    // position is the one property mpris never signals, so this rides the poller
+    // that already moves the progress bar and the backend only puts a signal on
+    // the bus when something other than the position moved
+    useEffect(() => {
+        mpris(() =>
+            bridge().mpris_state(
+                !!current && !paused,
+                position,
+                length,
+                volume,
+                queue.length > 1,
+                queue.length > 1,
+                looped,
+                shuffle_on,
+            ),
+        )
+    }, [current, paused, position, length, volume, queue.length, looped, shuffle_on])
 
     const up_next = current ? queue.slice(queue.indexOf(current) + 1).slice(0, 4) : []
 
@@ -1847,6 +1977,8 @@ export default function App() {
     async function seek_to(seconds: number) {
         await bridge().seek(seconds)
         set_position(seconds)
+
+        mpris(() => bridge().mpris_seeked(seconds))
     }
     const view_title = selection ?? NAV.find((item) => item.id === view)?.label ?? 'Playlists'
 

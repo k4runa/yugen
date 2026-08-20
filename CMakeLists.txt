@@ -13,6 +13,11 @@ find_package(CURL REQUIRED)
 
 pkg_check_modules(TAGLIB REQUIRED taglib)
 
+# gdbus, for the mpris interface in src/mpris.cpp. not a new dependency in
+# practice - webkitgtk already drags glib into the process, this only puts the
+# headers on the include path and asks the linker to be explicit about it.
+pkg_check_modules(GIO REQUIRED gio-2.0)
+
 # EXCLUDE_FROM_ALL keeps their own install rules out of ours, so installing
 # yugen does not drop saucer's headers and cmake config into the prefix.
 #
@@ -62,12 +67,14 @@ set(YUGEN_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ui/dist")
 # The executable itself.
 add_executable(${PROJECT_NAME}
     src/main.cpp
+    src/mpris.cpp
     src/services.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${TAGLIB_INCLUDE_DIRS}
+    ${GIO_INCLUDE_DIRS}
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
@@ -90,6 +97,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     nlohmann_json::nlohmann_json
     saucer::ui
     ${TAGLIB_LIBRARIES}
+    ${GIO_LIBRARIES}
     saucer::saucer
     CURL::libcurl
     discord-rpc

@@ -213,6 +213,10 @@ EOF
 
 # ------------------------------------------------------------------ source --
 
+# glib is named outright even though webkitgtk drags it in anyway: src/mpris.cpp
+# asks pkg-config for gio-2.0 by hand, and a distro that splits the .pc file out
+# of the webkit dev package would otherwise fail at configure time.
+#
 # webkit2gtk-4.1 is deliberately absent: `ldd` on the binary shows only
 # libwebkitgtk-6.0 and libjavascriptcoregtk-6.0, the 4.1 series is a different
 # library that nothing here loads. git is in every list because the clone below
@@ -225,29 +229,29 @@ install_deps() {
         arch)
             need_root pacman -S --needed --noconfirm \
                 base-devel git cmake ninja pkgconf nodejs npm \
-                taglib curl webkitgtk-6.0 ffmpeg python-pipx
+                taglib curl webkitgtk-6.0 glib2 ffmpeg python-pipx
             ;;
         debian)
             need_root apt-get update
             need_root apt-get install -y \
                 build-essential git cmake ninja-build pkg-config nodejs npm \
                 libtag1-dev libcurl4-openssl-dev libwebkitgtk-6.0-dev \
-                ffmpeg pipx
+                libglib2.0-dev ffmpeg pipx
             ;;
         fedora)
             need_root dnf install -y \
                 git cmake ninja-build gcc-c++ pkgconf-pkg-config nodejs npm \
                 taglib-devel libcurl-devel webkitgtk6.0-devel \
-                ffmpeg pipx
+                glib2-devel ffmpeg pipx
             ;;
         suse)
             need_root zypper install -y \
                 git cmake ninja gcc-c++ pkg-config nodejs npm \
                 taglib-devel libcurl-devel webkitgtk-6.0-devel \
-                ffmpeg python3-pipx
+                glib2-devel ffmpeg python3-pipx
             ;;
         *)
-            die "Unsupported distro. Install manually: git, cmake, ninja, a C++23 compiler, pkg-config, nodejs, npm, taglib, libcurl, webkitgtk-6.0, ffmpeg"
+            die "Unsupported distro. Install manually: git, cmake, ninja, a C++23 compiler, pkg-config, nodejs, npm, taglib, libcurl, glib2, webkitgtk-6.0, ffmpeg"
             ;;
     esac
 

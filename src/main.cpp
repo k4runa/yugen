@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <print>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -26,6 +27,7 @@
 
 // project
 #include "miniaudio.h"
+#include "mpris.h"
 #include "services.h"
 
 namespace fs = std::filesystem;
@@ -106,6 +108,20 @@ namespace
      {
           webview->expose(name, async_binding<decltype(fn)>::wrap(std::move(fn)));
      }
+
+     /*
+      * run_js
+      *
+      * execute() takes a saucer::cstring_view, and building one is enough for gcc
+      * to escalate the enclosing lambda into an immediate function - which then
+      * cannot be stored in the std::function the mpris handler is. Wrapping the
+      * call in a plain function keeps that out of the lambda; it has to stay a
+      * non-template so the escalation cannot simply follow it here.
+      */
+     void run_js(saucer::webview& view, const std::string& script)
+     {
+          view.execute(script);
+     }
 }
 
 coco::stray start(saucer::application* app)
@@ -129,6 +145,43 @@ coco::stray start(saucer::application* app)
      webview->set_context_menu(false);
 
      yugen::start_discord(APPLICATION_ID);
+
+     /*
+      * MPRIS. The interface is what every panel, lock screen and media key on
+      * the desktop reads a player through, so without it yugen plays to itself:
+      * nothing outside the process can see the track or reach the transport.
+      *
+      * The state it publishes is pushed in by the ui through the three bindings
+      * below, and the controls that come back the other way are handed to the
+      * page rather than to SoundManager. That is not a detour - the queue, the
+      * paused flag and the tags all live on the react side, and calling the
+      * backend behind its back would leave the window showing the wrong thing.
+      *
+      * The callback runs on the glib main loop, which is the same thread the
+      * window is on, and execute() is thread safe regardless.
+      */
+     yugen::mpris::start([&](std::string_view cmd, double arg) {
+          if(cmd == "raise")
+          {
+               window->show();
+               window->set_minimized(false);
+               window->focus();
+
+               return;
+          }
+
+          if(cmd == "quit")
+          {
+               app->quit();
+               return;
+          }
+
+          // the page registers the receiving end on the way up; until it does,
+          // the optional call simply drops the control
+          const std::string call = "window.__yugen_mpris?.('" + std::string{cmd} + "', " + std::to_string(arg) + ")";
+
+          run_js(*webview, call);
+     });
 
      /*
       * Playback control. miniaudio only flips state on a sound that is already
@@ -317,6 +370,27 @@ coco::stray start(saucer::application* app)
           sm::set_volume(vol);
      });
 
+     /*
+      * The ui half of MPRIS. mpris_track carries the cover as the same base64
+      * the page already holds, so it is only called when the track changes;
+      * mpris_state rides the one second poller that already drives the progress
+      * bar, and mpris_seeked is for the jumps that poller would otherwise
+      * smear over a second.
+      */
+     webview->expose("mpris_track", [](const std::string& title, const std::string& artist,
+          const std::string& album, const std::string& file_path, const std::string& cover) {
+          yugen::mpris::update_track(title, artist, album, file_path, cover);
+     });
+
+     webview->expose("mpris_state", [](bool playing, float position, float length, float volume,
+          bool can_next, bool can_prev, bool loop, bool shuffle) {
+          yugen::mpris::update_state(playing, position, length, volume, can_next, can_prev, loop, shuffle);
+     });
+
+     webview->expose("mpris_seeked", [](float position) {
+          yugen::mpris::seeked(position);
+     });
+
      webview->expose("get_activity", [] ->bool {
           return yugen::get_activity();
      });
@@ -347,6 +421,7 @@ coco::stray start(saucer::application* app)
 
      co_await app->finish();
 
+     yugen::mpris::stop();
      yugen::stop_discord();
      ma_engine_uninit(&engine);
 }
