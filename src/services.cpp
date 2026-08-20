@@ -358,6 +358,9 @@ namespace yugen
                sound_initialized = false;
           }
 
+          const float last_vol = load_volume();
+          std::println("[DEBUG] Loaded volume: {}", last_vol);
+
           const ma_result res = ma_sound_init_from_file(engine, file_path.c_str(), 0, NULL, NULL, &sound);
 
           if(res != MA_SUCCESS)
@@ -367,6 +370,7 @@ namespace yugen
                return;
           }
 
+          ma_sound_set_volume(&sound, last_vol);
           ma_sound_start(&sound);
           sound_initialized = true;
 
