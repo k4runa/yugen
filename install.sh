@@ -21,6 +21,18 @@ APPIMAGE_URL="https://github.com/$REPO/releases/download/$VERSION/Yugen-x86_64.A
 # packaging/appimage/build.sh reports after a release build.
 APPIMAGE_MIN_GLIBC="2.35"
 
+# ui/package.json is on vite 8, which refuses to run on anything older - and its
+# bundler imports styleText from node:util, an export that is not there before
+# 20.19 at all. A distro still shipping node 18 therefore cannot build the ui,
+# however much npm's EBADENGINE line makes it look like a warning.
+NODE_MIN="20.19.0"
+NODE_WANTED="22"
+NVM_VERSION="v0.40.1"
+
+# set when nvm is the thing that provided node, so the closing message can say
+# that the new node lives in the shell rc and not on PATH yet
+NODE_FROM_NVM=0
+
 # where the source build lands. assets/yugen.desktop runs plain `yugen`, so
 # this only has to be somewhere on PATH - but it has to be the same place every
 # time, or old copies pile up and shadow each other.
@@ -66,6 +78,17 @@ ask() {
     printf '%s' "$reply"
 }
 
+# yes unless the answer starts with n. No tty means no answer was possible, and
+# stopping there would strand `curl ... | bash` on a question nobody ever saw.
+confirm() {
+    local reply
+    reply=$(ask "$1 [Y/n]: ")
+    case "$reply" in
+        n*|N*) return 1 ;;
+        *)     return 0 ;;
+    esac
+}
+
 fetch() {
     local url="$1" out="$2"
     if have curl; then
@@ -78,6 +101,39 @@ fetch() {
 }
 
 version_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" = "$2" ]; }
+
+node_version() {
+    have node || return 1
+    node -v 2>/dev/null | sed 's/^v//'
+}
+
+# the ui is the only part that needs a current node, but it is also the first
+# thing built, so an old one burns the whole run before the compiler even starts
+node_ok() {
+    local v
+    v=$(node_version) || return 1
+    [ -n "$v" ] && version_ge "$v" "$NODE_MIN"
+}
+
+# 18.19.1+dfsg-6ubuntu2 -> 18.19.1
+apt_node_candidate() {
+    apt-cache policy nodejs 2>/dev/null \
+        | awk '/Candidate:/ { print $2 }' \
+        | sed -e 's/^[0-9]*://' -e 's/[-+~].*$//'
+}
+
+# debian and ubuntu freeze node for the life of a release - 24.04 is still on 18
+# - while the others track it closely enough to be worth asking for
+distro_node_is_current() {
+    case "$1" in
+        debian)
+            local cand
+            cand=$(apt_node_candidate)
+            [ -n "$cand" ] && version_ge "$cand" "$NODE_MIN"
+            ;;
+        *) return 0 ;;
+    esac
+}
 
 detect_distro() {
     local id="" like=""
@@ -223,30 +279,45 @@ EOF
 # needs it on a machine that has never built anything.
 install_deps() {
     local distro="$1"
+    local node_pkgs=(nodejs npm)
+
+    # Two separate reasons to leave node out of this list. Its version may be too
+    # old to build the ui at all, and its npm package hard-depends on its nodejs,
+    # so asking for both on a machine that already has a newer node from anywhere
+    # else is exactly what produces apt's "held broken packages" wall.
+    # ensure_node() deals with whatever is left over.
+    if node_ok; then
+        info "Node $(node_version) is already installed, leaving the package manager out of it"
+        node_pkgs=()
+    elif ! distro_node_is_current "$distro"; then
+        warn "This distro's node package is older than $NODE_MIN and cannot build the ui"
+        node_pkgs=()
+    fi
+
     info "Installing build and runtime dependencies for $distro..."
 
     case "$distro" in
         arch)
             need_root pacman -S --needed --noconfirm \
-                base-devel git cmake ninja pkgconf nodejs npm \
+                base-devel git cmake ninja pkgconf "${node_pkgs[@]}" \
                 taglib curl webkitgtk-6.0 glib2 ffmpeg python-pipx
             ;;
         debian)
             need_root apt-get update
-            need_root apt-get install -y \
-                build-essential git cmake ninja-build pkg-config nodejs npm \
+            apt_install "${node_pkgs[@]}" \
+                build-essential git cmake ninja-build pkg-config \
                 libtag1-dev libcurl4-openssl-dev libwebkitgtk-6.0-dev \
                 libglib2.0-dev ffmpeg pipx
             ;;
         fedora)
             need_root dnf install -y \
-                git cmake ninja-build gcc-c++ pkgconf-pkg-config nodejs npm \
+                git cmake ninja-build gcc-c++ pkgconf-pkg-config "${node_pkgs[@]}" \
                 taglib-devel libcurl-devel webkitgtk6.0-devel \
                 glib2-devel ffmpeg pipx
             ;;
         suse)
             need_root zypper install -y \
-                git cmake ninja gcc-c++ pkg-config nodejs npm \
+                git cmake ninja gcc-c++ pkg-config "${node_pkgs[@]}" \
                 taglib-devel libcurl-devel webkitgtk-6.0-devel \
                 glib2-devel ffmpeg python3-pipx
             ;;
@@ -256,6 +327,206 @@ install_deps() {
     esac
 
     ok "System packages installed"
+}
+
+# apt fails as a unit: one unsatisfiable package takes the whole command down
+# with it, so a half-migrated node blocks dependencies that have nothing to do
+# with node. Clearing that out and going again is the only way through.
+apt_install() {
+    if need_root apt-get install -y "$@"; then
+        return 0
+    fi
+
+    warn "apt could not satisfy that set of packages."
+    info "That is almost always a node installed from outside the distro fighting the distro's npm."
+    if purge_distro_node && need_root apt-get install -y "$@"; then
+        return 0
+    fi
+
+    err "Could not install the build dependencies."
+    die "Repair apt first (sudo apt-get -f install), then run this again."
+}
+
+# npm, node-* and libnode* all hang off the distro's own nodejs. A nodejs from
+# NodeSource or nvm satisfies none of them, so they have to go rather than be
+# upgraded - apt will not do that by itself, it just reports broken packages.
+purge_distro_node() {
+    have dpkg-query || return 1
+
+    local stale
+    stale=$(dpkg-query -W -f '${db:Status-Status} ${binary:Package}\n' \
+                nodejs npm 'libnode*' 'node-*' 2>/dev/null \
+            | awk '$1 == "installed" { print $2 }' | tr '\n' ' ')
+    stale=${stale% }
+    [ -n "$stale" ] || return 0
+
+    warn "These packages have to be removed before a newer node can go in:"
+    printf "    %s\n" "$stale"
+    confirm "  Remove them?" || return 1
+
+    # deliberately unquoted: the list is meant to split into arguments
+    # shellcheck disable=SC2086
+    need_root apt-get remove --purge -y $stale || return 1
+    need_root apt-get autoremove -y || true
+    hash -r 2>/dev/null || true
+    ok "Removed the conflicting node packages"
+}
+
+# Runs after the distro packages, because on most distros that step is what puts
+# node there in the first place.
+ensure_node() {
+    local distro="$1"
+
+    if node_ok; then
+        ok "Node $(node_version) is new enough to build the ui"
+        return 0
+    fi
+
+    printf "\n"
+    if have node; then
+        warn "Node $(node_version) is installed, but the ui needs $NODE_MIN or newer."
+        info "Vite 8 imports styleText from node:util, which older versions do not export,"
+        info "so the build dies with a SyntaxError instead of a version complaint."
+    else
+        warn "Node is not installed, and the ui cannot be built without it."
+    fi
+
+    info "nvm puts Node $NODE_WANTED under your home directory, beside the distro's"
+    info "packages rather than on top of them, which is what keeps apt out of this."
+    confirm "  Install Node $NODE_WANTED with nvm now?" \
+        || die "Install Node $NODE_MIN or newer, then run this again."
+
+    if install_node_nvm; then
+        NODE_FROM_NVM=1
+        ok "Node $(node_version) via nvm"
+        return 0
+    fi
+
+    warn "The nvm route did not work. Falling back to a system package."
+    if install_node_system "$distro" && node_ok; then
+        ok "Node $(node_version)"
+        return 0
+    fi
+
+    err "Could not get a usable Node onto this machine."
+    err "Install Node $NODE_MIN or newer by hand and run this again:"
+    printf "    ${BOLD}curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/%s/install.sh | bash${RESET}\n" "$NVM_VERSION"
+    printf "    ${BOLD}source ~/.nvm/nvm.sh && nvm install %s${RESET}\n" "$NODE_WANTED"
+    exit 1
+}
+
+# A node installed by nvm lives in the shell rc, and a non-interactive run of
+# this script never reads that. Without this the machine looks like it has no
+# node at all and the whole nvm conversation happens a second time.
+load_nvm() {
+    local dir="${NVM_DIR:-$HOME/.nvm}"
+    [ -s "$dir/nvm.sh" ] || return 0
+    node_ok && return 0
+
+    set +eu
+    export NVM_DIR="$dir"
+    # shellcheck disable=SC1091
+    . "$dir/nvm.sh" >/dev/null 2>&1
+    nvm use node >/dev/null 2>&1 || nvm use --lts >/dev/null 2>&1
+    set -eu
+
+    hash -r 2>/dev/null || true
+    node_ok && info "Using Node $(node_version) from nvm"
+    return 0
+}
+
+install_node_nvm() {
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+    if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+        info "Installing nvm $NVM_VERSION..."
+        fetch "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" \
+              "$TMP_WORK/nvm-install.sh" || return 1
+        # the installer appends to the shell rc, and that is what makes the new
+        # node still be there in the next terminal
+        bash "$TMP_WORK/nvm-install.sh" || return 1
+    fi
+
+    [ -s "$NVM_DIR/nvm.sh" ] || return 1
+
+    info "Installing Node $NODE_WANTED..."
+    local rc=0
+    # nvm.sh reads variables it never set and returns non-zero for things it
+    # treats as routine. Neither of those survives set -eu.
+    set +eu
+    # shellcheck disable=SC1091
+    . "$NVM_DIR/nvm.sh"
+    nvm install "$NODE_WANTED" && nvm use "$NODE_WANTED"
+    rc=$?
+    set -eu
+
+    # nvm use rewrote PATH in this shell, so cmake and npm below inherit it
+    hash -r 2>/dev/null || true
+    [ "$rc" -eq 0 ] && node_ok
+}
+
+# Last resort. Every one of these replaces the distro's node instead of living
+# next to it, which is the whole reason nvm is tried first.
+install_node_system() {
+    case "$1" in
+        debian)
+            purge_distro_node || return 1
+            info "Adding the NodeSource repository for Node $NODE_WANTED..."
+            fetch "https://deb.nodesource.com/setup_$NODE_WANTED.x" "$TMP_WORK/nodesource.sh" || return 1
+            need_root bash "$TMP_WORK/nodesource.sh" || return 1
+            # NodeSource's nodejs carries its own npm, so npm is not asked for
+            need_root apt-get install -y nodejs || return 1
+            ;;
+        fedora)
+            need_root dnf install -y "nodejs$NODE_WANTED" \
+                || need_root dnf module install -y "nodejs:$NODE_WANTED" \
+                || return 1
+            ;;
+        arch)
+            need_root pacman -S --needed --noconfirm nodejs npm || return 1
+            ;;
+        suse)
+            need_root zypper install -y "nodejs$NODE_WANTED" || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    hash -r 2>/dev/null || true
+}
+
+# A failed npm install leaves a half-populated node_modules behind, and a tree
+# fetched by a node that has since been replaced is the other thing that breaks
+# the build for a reason the error never mentions. One clean retry covers both.
+build_ui() {
+    local dir="$1"
+
+    info "Building the ui with Node $(node_version)..."
+    if ( cd "$dir" && npm_install_deps && npm run build ); then
+        return 0
+    fi
+
+    warn "The ui build failed. Retrying with a clean node_modules..."
+    rm -rf "$dir/node_modules"
+    if ( cd "$dir" && npm_install_deps && npm run build ); then
+        return 0
+    fi
+
+    err "The ui could not be built with Node $(node_version)."
+    err "Everything else is in place, so this one is worth reporting:"
+    printf "    ${BOLD}https://github.com/%s/issues${RESET}\n" "$REPO"
+    exit 1
+}
+
+npm_install_deps() {
+    # ci is the reproducible one, but it refuses to run at all when the lockfile
+    # has drifted from package.json, and that is not a reason to stop
+    if [ -f package-lock.json ]; then
+        npm ci --no-audit --no-fund && return 0
+        warn "npm ci did not work, falling back to npm install"
+    fi
+    npm install --no-audit --no-fund
 }
 
 install_ytdlp() {
@@ -296,8 +567,7 @@ build_from_source() {
 
     # saucer_embed() globs ui/dist while cmake configures, so the bundle has to
     # exist before the backend is configured
-    info "Building the ui..."
-    ( cd "$src/ui" && npm install && npm run build )
+    build_ui "$src/ui"
 
     info "Building yugen..."
     # the prefix has to be spelled out. Without it cmake reuses whatever is
@@ -373,7 +643,9 @@ main() {
             info "Detected distro family: $distro"
             [ "$distro" = unknown ] && die "Could not identify this distro, install the dependencies manually"
 
+            load_nvm
             install_deps "$distro"
+            ensure_node "$distro"
             install_ytdlp
             build_from_source
             ;;
@@ -386,6 +658,11 @@ main() {
     esac
 
     printf "\n${GREEN}${BOLD}  Done!${RESET} Run ${BOLD}yugen${RESET} to start.\n\n"
+
+    if [ "$NODE_FROM_NVM" = 1 ]; then
+        printf "  Node $NODE_WANTED came from nvm and only exists in this shell so far.\n"
+        printf "  Open a new terminal, or run ${BOLD}source ~/.nvm/nvm.sh${RESET}, before using node yourself.\n\n"
+    fi
 }
 
 main "$@"
