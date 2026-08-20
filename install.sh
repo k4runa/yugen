@@ -570,11 +570,17 @@ build_from_source() {
     build_ui "$src/ui"
 
     info "Building yugen..."
+    # saucer refuses to configure when it does not recognise the compiler as
+    # new enough, and its check is stricter than what the build actually needs
+    # (it trips on gcc 13 even though the sources compile). The real C++23
+    # requirement is enforced by CMAKE_CXX_STANDARD, so let the compile fail
+    # loudly instead of the configure step.
     # the prefix has to be spelled out. Without it cmake reuses whatever is
     # cached in an existing build tree, and installing to a different prefix
     # than last time leaves two binaries on PATH with the stale one winning.
     cmake -S "$src" -B "$src/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -Dsaucer_no_compiler_version_check=ON \
         -DCMAKE_INSTALL_PREFIX="$PREFIX"
 
     cmake --build "$src/build" --parallel
