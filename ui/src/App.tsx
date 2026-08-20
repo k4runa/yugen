@@ -2562,119 +2562,123 @@ export default function App() {
                         </section>
                     )}
 
-                    <div className='view-head'>
-                        {selection && groups && (
-                            <button
-                                className='icon-btn back'
-                                {...tip('Back')}
-                                onClick={() => set_selection(null)}
-                            >
-                                <Icon d={ICONS.back} size={17} />
-                            </button>
-                        )}
-                        {view === 'playlist' && selection ? (
-                            <div className='title-edit'>
+                    {/* the search and what is playing hold their place; only the
+                        listing below them scrolls */}
+                    <div className='main-scroll'>
+                        <div className='view-head'>
+                            {selection && groups && (
+                                <button
+                                    className='icon-btn back'
+                                    {...tip('Back')}
+                                    onClick={() => set_selection(null)}
+                                >
+                                    <Icon d={ICONS.back} size={17} />
+                                </button>
+                            )}
+                            {view === 'playlist' && selection ? (
+                                <div className='title-edit'>
+                                    <h2 className='section-title ellipsis'>{view_title}</h2>
+                                    <button
+                                        className='icon-btn tiny edit'
+                                        {...tip('Edit details')}
+                                        onClick={() => open_dialog({ playlist: selection })}
+                                    >
+                                        <Icon d={ICONS.rename} size={14} />
+                                    </button>
+                                </div>
+                            ) : (
                                 <h2 className='section-title ellipsis'>{view_title}</h2>
-                                <button
-                                    className='icon-btn tiny edit'
-                                    {...tip('Edit details')}
-                                    onClick={() => open_dialog({ playlist: selection })}
-                                >
-                                    <Icon d={ICONS.rename} size={14} />
-                                </button>
-                            </div>
-                        ) : (
-                            <h2 className='section-title ellipsis'>{view_title}</h2>
-                        )}
-                        <span className='muted'>
-                            {groups && !selection
-                                ? `${groups.size} ${view === 'albums' ? 'albums' : 'artists'}`
-                                : `${listed.length} tracks`}
-                        </span>
+                            )}
+                            <span className='muted'>
+                                {groups && !selection
+                                    ? `${groups.size} ${view === 'albums' ? 'albums' : 'artists'}`
+                                    : `${listed.length} tracks`}
+                            </span>
 
-                        {tunable && (
-                            <div className='filter-wrap'>
-                                <button
-                                    className={`icon-btn filter${filters ? ' on' : ''}`}
-                                    {...tip('Sort and view')}
-                                    onClick={(e) => {
-                                        e.stopPropagation()
-                                        set_filters(!filters)
-                                    }}
-                                >
-                                    <Icon d={ICONS.filter} size={16} />
-                                </button>
+                            {tunable && (
+                                <div className='filter-wrap'>
+                                    <button
+                                        className={`icon-btn filter${filters ? ' on' : ''}`}
+                                        {...tip('Sort and view')}
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            set_filters(!filters)
+                                        }}
+                                    >
+                                        <Icon d={ICONS.filter} size={16} />
+                                    </button>
 
-                                {filters && (
-                                    <div className='filter-menu' onClick={(e) => e.stopPropagation()}>
-                                        <div className='filter-label'>Sort by</div>
-                                        {SORTS.map((option) => (
-                                            <button
-                                                key={option.id}
-                                                onClick={() => {
-                                                    set_sort(option.id)
-                                                    save_pref('sort', option.id)
-                                                }}
-                                            >
-                                                <span className='ellipsis'>{option.label}</span>
-                                                {sort === option.id && <Icon d={ICONS.check} size={14} />}
-                                            </button>
-                                        ))}
+                                    {filters && (
+                                        <div className='filter-menu' onClick={(e) => e.stopPropagation()}>
+                                            <div className='filter-label'>Sort by</div>
+                                            {SORTS.map((option) => (
+                                                <button
+                                                    key={option.id}
+                                                    onClick={() => {
+                                                        set_sort(option.id)
+                                                        save_pref('sort', option.id)
+                                                    }}
+                                                >
+                                                    <span className='ellipsis'>{option.label}</span>
+                                                    {sort === option.id && <Icon d={ICONS.check} size={14} />}
+                                                </button>
+                                            ))}
 
-                                        <div className='context-sep' />
+                                            <div className='context-sep' />
 
-                                        <div className='filter-label'>View as</div>
-                                        {LAYOUTS.map((option) => (
-                                            <button
-                                                key={option.id}
-                                                onClick={() => choose_layout(option.id)}
-                                            >
-                                                <span className='ellipsis'>{option.label}</span>
-                                                {layout === option.id && (
-                                                    <Icon d={ICONS.check} size={14} />
-                                                )}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
+                                            <div className='filter-label'>View as</div>
+                                            {LAYOUTS.map((option) => (
+                                                <button
+                                                    key={option.id}
+                                                    onClick={() => choose_layout(option.id)}
+                                                >
+                                                    <span className='ellipsis'>{option.label}</span>
+                                                    {layout === option.id && (
+                                                        <Icon d={ICONS.check} size={14} />
+                                                    )}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
 
-                    {groups && !selection ? (
-                        groups.size ? (
-                            group_cards(groups, view === 'artists')
-                        ) : (
-                            <p className='empty'>Nothing to group yet.</p>
-                        )
-                    ) : listed.length ? (
-                        // only the two views that carry the menu answer to a layout
-                        tunable ? (
-                            layout === 'list' ? (
-                                track_list(listed)
-                            ) : layout === 'compact' ? (
+                        {groups && !selection ? (
+                            groups.size ? (
+                                group_cards(groups, view === 'artists')
+                            ) : (
+                                <p className='empty'>Nothing to group yet.</p>
+                            )
+                        ) : listed.length ? (
+                            // only the two views that carry the menu answer to a layout
+                            tunable ? (
+                                layout === 'list' ? (
+                                    track_list(listed)
+                                ) : layout === 'compact' ? (
+                                    track_rows(listed)
+                                ) : (
+                                    track_cards(listed)
+                                )
+                            ) : selection ? (
                                 track_rows(listed)
                             ) : (
                                 track_cards(listed)
                             )
-                        ) : selection ? (
-                            track_rows(listed)
                         ) : (
-                            track_cards(listed)
-                        )
-                    ) : (
-                        <p className='empty'>
-                            {loading
-                                ? 'Scanning your library...'
-                                : scan_error
-                                  ? `Could not read your library: ${scan_error}`
-                                  : view === 'liked'
-                                  ? 'No liked songs yet.'
-                                  : view === 'playlist'
-                                    ? 'This playlist is empty. Right-click a track to add it.'
-                                    : `No mp3 files found in ${music_folder}`}
-                        </p>
-                    )}
+                            <p className='empty'>
+                                {loading
+                                    ? 'Scanning your library...'
+                                    : scan_error
+                                      ? `Could not read your library: ${scan_error}`
+                                      : view === 'liked'
+                                      ? 'No liked songs yet.'
+                                      : view === 'playlist'
+                                        ? 'This playlist is empty. Right-click a track to add it.'
+                                        : `No mp3 files found in ${music_folder}`}
+                            </p>
+                        )}
+                    </div>
                 </main>
 
                 <aside className={`rightbar${rail_open ? '' : ' collapsed'}`} inert={!rail_open}>

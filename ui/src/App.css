@@ -562,7 +562,19 @@ button {
     flex-direction: column;
     min-width: 0;
     padding: 1.25rem 1.5rem;
+    overflow: hidden;
+}
+
+/* the search and the now-playing block stay where they are: they are how the
+   player is reached, and scrolling a long library should not put them away */
+.main-scroll {
+    flex: 1;
+    min-height: 0;
+    /* the cards would otherwise be clipped a hair short of the panel's padding */
+    margin-right: -1.5rem;
+    padding-right: 1.5rem;
     overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 /* nothing else lives up here, so the search is simply centred */
@@ -1419,7 +1431,7 @@ button {
 /* ---------- overlay scrollbars ---------- */
 
 .shelf::-webkit-scrollbar,
-.main::-webkit-scrollbar,
+.main-scroll::-webkit-scrollbar,
 .rightbar::-webkit-scrollbar,
 .search-body::-webkit-scrollbar,
 .context-menu.submenu::-webkit-scrollbar {
@@ -1427,7 +1439,7 @@ button {
 }
 
 .shelf::-webkit-scrollbar-track,
-.main::-webkit-scrollbar-track,
+.main-scroll::-webkit-scrollbar-track,
 .rightbar::-webkit-scrollbar-track,
 .search-body::-webkit-scrollbar-track,
 .context-menu.submenu::-webkit-scrollbar-track {
@@ -1437,9 +1449,14 @@ button {
 /* the scrollbar is painted right against the panel edge, and near the top and
    bottom that edge is a curve, so the thumb reads as hanging outside it. the
    track is held clear of both corners instead of the radius being given up. */
-.main::-webkit-scrollbar-track,
 .rightbar::-webkit-scrollbar-track {
     margin: var(--radius) 0;
+}
+
+/* its top is no longer a corner - the search and the now-playing block are - so
+   only the bottom one has to be cleared */
+.main-scroll::-webkit-scrollbar-track {
+    margin: 0.25rem 0 var(--radius);
 }
 
 .shelf::-webkit-scrollbar-track {
@@ -1463,7 +1480,7 @@ button {
 }
 
 .shelf::-webkit-scrollbar-thumb,
-.main::-webkit-scrollbar-thumb,
+.main-scroll::-webkit-scrollbar-thumb,
 .rightbar::-webkit-scrollbar-thumb,
 .search-body::-webkit-scrollbar-thumb,
 .context-menu.submenu::-webkit-scrollbar-thumb {
@@ -1475,7 +1492,7 @@ button {
 }
 
 .sidebar:hover .shelf::-webkit-scrollbar-thumb,
-.main:hover::-webkit-scrollbar-thumb,
+.main:hover .main-scroll::-webkit-scrollbar-thumb,
 .rightbar:hover::-webkit-scrollbar-thumb,
 .search-body:hover::-webkit-scrollbar-thumb,
 .context-menu.submenu:hover::-webkit-scrollbar-thumb {
