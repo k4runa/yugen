@@ -183,6 +183,17 @@ const LAYOUTS: { id: Layout; label: string }[] = [
 
 type Shelf = 'playlists' | 'albums' | 'artists'
 
+// which listing a layout belongs to, and the key it is remembered under
+type LayoutKey = 'library' | 'liked' | 'playlist' | 'group'
+
+const LAYOUT_PREFS: Record<LayoutKey, string> = {
+    library: 'library_layout',
+    liked: 'liked_layout',
+    // what the playlist layout has been saved as since before the others existed
+    playlist: 'track_layout',
+    group: 'group_layout',
+}
+
 type LibraryView = 'compact' | 'list' | 'compact-grid' | 'grid'
 
 const LIBRARY_VIEWS: { id: LibraryView; label: string }[] = [
@@ -779,14 +790,19 @@ export default function App() {
     const [sort, set_sort] = useState<Sort>(() =>
         stored_pref('sort', SORTS.map((s) => s.id), 'title'),
     )
-    const [track_layout, set_track_layout] = useState<Layout>(() =>
-        stored_pref('track_layout', LAYOUTS.map((l) => l.id), 'list'),
-    )
-    // liked songs carries its own choice: the two views are read differently, and
-    // this one has always opened as a wall of covers
-    const [liked_layout, set_liked_layout] = useState<Layout>(() =>
-        stored_pref('liked_layout', LAYOUTS.map((l) => l.id), 'grid'),
-    )
+    // one layout per kind of listing, each starting where that listing has always
+    // opened: covers for the library and the liked songs, a list for a playlist,
+    // and the plain rows an album or an artist has always come up as
+    const [layouts, set_layouts] = useState<Record<LayoutKey, Layout>>(() => {
+        const ids = LAYOUTS.map((option) => option.id)
+
+        return {
+            library: stored_pref(LAYOUT_PREFS.library, ids, 'grid'),
+            liked: stored_pref(LAYOUT_PREFS.liked, ids, 'grid'),
+            playlist: stored_pref(LAYOUT_PREFS.playlist, ids, 'list'),
+            group: stored_pref(LAYOUT_PREFS.group, ids, 'compact'),
+        }
+    })
     const [dialog, set_dialog] = useState<Dialog | null>(null)
     const [draft, set_draft] = useState('')
 
@@ -1552,29 +1568,38 @@ export default function App() {
             ? (playlists[selection] ?? []).filter((name) => songs.includes(name)).sort(by_sort)
             : []
 
-    // the current queue: what prev/next walks through
+    // the current queue: what prev/next walks through. every listing answers to
+    // the sort, so the order on screen is the order it plays in.
     const listed =
         view === 'playlist'
             ? playlist_songs
             : selection
-              ? (groups?.get(selection) ?? [])
+              ? [...(groups?.get(selection) ?? [])].sort(by_sort)
               : view === 'liked'
                 ? [...liked_songs].sort(by_sort)
-                : songs
+                : [...songs].sort(by_sort)
 
-    // sorting and layout are offered on the two views that are a plain track list
-    // the user arranges: their own playlists, and the songs they liked
-    const tunable = view === 'playlist' || view === 'liked'
-    const layout = view === 'liked' ? liked_layout : track_layout
+    // anything that is a list of tracks is arranged by the menu: the library, an
+    // album or an artist opened up, a playlist, the liked songs. the album and
+    // artist overviews are cards of groups rather than tracks, so they are not.
+    const tunable = !groups || !!selection
+
+    // each of them remembers its own layout, because they are read differently -
+    // a library is browsed by cover, a playlist is read down the list
+    const layout_key: LayoutKey =
+        view === 'playlist'
+            ? 'playlist'
+            : view === 'liked'
+              ? 'liked'
+              : selection
+                ? 'group'
+                : 'library'
+
+    const layout = layouts[layout_key]
 
     function choose_layout(next: Layout) {
-        if (view === 'liked') {
-            set_liked_layout(next)
-            save_pref('liked_layout', next)
-        } else {
-            set_track_layout(next)
-            save_pref('track_layout', next)
-        }
+        set_layouts({ ...layouts, [layout_key]: next })
+        save_pref(LAYOUT_PREFS[layout_key], next)
     }
 
     // prev/next walk the shuffled order when shuffle is on, otherwise the view order
@@ -2651,16 +2676,9 @@ export default function App() {
                                 <p className='empty'>Nothing to group yet.</p>
                             )
                         ) : listed.length ? (
-                            // only the two views that carry the menu answer to a layout
-                            tunable ? (
-                                layout === 'list' ? (
-                                    track_list(listed)
-                                ) : layout === 'compact' ? (
-                                    track_rows(listed)
-                                ) : (
-                                    track_cards(listed)
-                                )
-                            ) : selection ? (
+                            layout === 'list' ? (
+                                track_list(listed)
+                            ) : layout === 'compact' ? (
                                 track_rows(listed)
                             ) : (
                                 track_cards(listed)
