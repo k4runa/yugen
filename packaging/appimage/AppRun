@@ -1,0 +1,82 @@
+#!/bin/sh
+#
+# yugen's AppImage entry point.
+#
+# Two things happen here that a stock linuxdeploy AppRun does not do.
+#
+# 1. yt-dlp and ffmpeg are shipped inside the bundle and put on PATH ahead of
+#    whatever the host has. services.cpp shells out to bare `yt-dlp`, so the
+#    lookup goes through PATH and no code change is needed; yt-dlp finds ffmpeg
+#    the same way.
+#
+# 2. WebKitGTK is relocated with a bind mount. Release builds of
+#    libwebkitgtk-6.0 carry the path to their helper processes as a compiled-in
+#    absolute string - /usr/lib/webkitgtk-6.0/WebKitNetworkProcess - and the
+#    WEBKIT_EXEC_PATH override only exists in developer builds. Without the
+#    system package the app dies at startup with
+#
+#      Unable to spawn a new child process: Failed to spawn child process
+#      "/usr/lib/webkitgtk-6.0/WebKitNetworkProcess" (No such file or directory)
+#
+#    so the bundled copy is bind-mounted over that exact path in a private
+#    namespace. This is not a sandbox: `--dev-bind / /` leaves the rest of the
+#    filesystem exactly as it was, which is what the player needs (the music
+#    folder, the discord socket, pulse). Bubblewrap is bundled too, but it still
+#    needs unprivileged user namespaces to be enabled on the host.
+
+set -e
+
+here=$(dirname "$(readlink -f "$0")")
+
+export PATH="$here/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$here/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$here/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export GSETTINGS_SCHEMA_DIR="$here/usr/share/glib-2.0/schemas"
+export GIO_MODULE_DIR="$here/usr/lib/gio/modules"
+
+# the loader cache is written with absolute paths, so the build script leaves a
+# placeholder in it and the real prefix is only known here
+if [ -f "$here/usr/lib/gdk-pixbuf-2.0/loaders.cache" ]; then
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/yugen"
+    mkdir -p "$cache"
+    sed "s|@APPDIR@|$here|g" "$here/usr/lib/gdk-pixbuf-2.0/loaders.cache" > "$cache/loaders.cache"
+    export GDK_PIXBUF_MODULE_FILE="$cache/loaders.cache"
+fi
+
+# an escape hatch for the machines where the gpu path is the thing that breaks:
+# YUGEN_SAFE_MODE=1 falls back to software compositing
+if [ -n "${YUGEN_SAFE_MODE:-}" ]; then
+    export WEBKIT_DISABLE_DMABUF_RENDERER=1
+    export WEBKIT_DISABLE_COMPOSITING_MODE=1
+fi
+
+webkit="$here/usr/lib/webkitgtk-6.0"
+
+# the guard keeps the re-exec from looping if the bind mount silently no-ops
+if [ -d "$webkit" ] && [ -z "${YUGEN_IN_NAMESPACE:-}" ]; then
+    YUGEN_IN_NAMESPACE=1
+    export YUGEN_IN_NAMESPACE
+
+    if bwrap --dev-bind / / -- true 2>/dev/null; then
+        exec bwrap --dev-bind / / \
+                   --bind "$webkit" /usr/lib/webkitgtk-6.0 \
+                   --die-with-parent \
+                   -- "$here/usr/bin/yugen" "$@"
+    fi
+
+    # falling through means the host's own webkitgtk-6.0 is the only one that can
+    # be reached, and it is only there if the package happens to be installed
+    if [ ! -x /usr/lib/webkitgtk-6.0/WebKitWebProcess ]; then
+        echo "yugen: bubblewrap could not set up a namespace and this system has" >&2
+        echo "       no webkitgtk-6.0 installed, so the web process cannot start." >&2
+        echo "" >&2
+        echo "       Enable unprivileged user namespaces:" >&2
+        echo "         sudo sysctl -w kernel.unprivileged_userns_clone=1" >&2
+        echo "       or install the system package (webkitgtk-6.0 / libwebkitgtk-6.0-4)." >&2
+        exit 1
+    fi
+
+    echo "yugen: no user namespaces, falling back to the system webkitgtk-6.0" >&2
+fi
+
+exec "$here/usr/bin/yugen" "$@"

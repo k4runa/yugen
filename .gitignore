@@ -20,4 +20,5 @@ packaging/aur/*.tar.gz
 
 # appimage build output, and the tool that produces it
 AppDir/
+build-appimage/
 *.AppImage
