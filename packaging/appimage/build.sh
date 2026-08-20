@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 #
-# Builds yugen.AppImage with yt-dlp, ffmpeg and WebKitGTK inside it, so the only
-# thing the target machine has to provide is a kernel that allows unprivileged
-# user namespaces. See AppRun next to this file for why WebKit needs the extra
-# treatment.
+# Builds yugen.AppImage with yt-dlp and ffmpeg inside it.
 #
 #   ./packaging/appimage/build.sh
+#
+# WebKitGTK and the GTK stack under it are deliberately left to the host. The
+# helper-process path is compiled into libwebkitgtk as an absolute string with
+# no override outside developer builds, so a bundled copy can only be reached
+# by mounting it over that path, and once webkit comes from the system every
+# library it shares with the app has to come from there too. One distro package
+# is a better trade than that.
 #
 # Knobs, all optional:
 #   YUGEN_SKIP_UI=1     reuse ui/dist instead of running npm
@@ -31,7 +35,7 @@ die() { printf '\n\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # patchelf and strip come from inside the linuxdeploy AppImage, so they are not
 # listed here
-for tool in cmake curl tar bwrap; do
+for tool in cmake curl tar; do
     command -v "$tool" >/dev/null || die "$tool is not installed"
 done
 
@@ -92,73 +96,53 @@ chmod +x "$appdir/usr/bin/ffmpeg" "$appdir/usr/bin/ffprobe"
     || die "this ffmpeg build has no libmp3lame, mp3 extraction would fail"
 echo "    $("$appdir/usr/bin/ffmpeg" -version 2>/dev/null | head -1)"
 
-# --- webkit ---------------------------------------------------------------
-
-webkit_src=""
-for dir in /usr/lib/webkitgtk-6.0 /usr/lib64/webkitgtk-6.0 /usr/libexec/webkitgtk-6.0 \
-           /usr/lib/x86_64-linux-gnu/webkitgtk-6.0; do
-    [ -x "$dir/WebKitWebProcess" ] && { webkit_src="$dir"; break; }
-done
-[ -n "$webkit_src" ] || die "no webkitgtk-6.0 helper processes found on this system"
-
-say "bundling webkit helpers from $webkit_src"
-mkdir -p "$appdir/usr/lib/webkitgtk-6.0"
-cp -r "$webkit_src"/. "$appdir/usr/lib/webkitgtk-6.0/"
-# neither is reachable from the player and together they are most of the tree
-rm -f "$appdir/usr/lib/webkitgtk-6.0/MiniBrowser" "$appdir/usr/lib/webkitgtk-6.0/jsc"
-
-# --- glib/gtk runtime bits ------------------------------------------------
-
-say "bundling the glib runtime"
-
-if [ -d /usr/lib/gio/modules ]; then
-    mkdir -p "$appdir/usr/lib/gio/modules"
-    # giomodule.cache stores plain filenames, so it survives the move as-is.
-    # libgiognutls is the one that matters: without it webkit has no tls backend.
-    cp -r /usr/lib/gio/modules/. "$appdir/usr/lib/gio/modules/"
-fi
-
-if [ -f /usr/share/glib-2.0/schemas/gschemas.compiled ]; then
-    mkdir -p "$appdir/usr/share/glib-2.0/schemas"
-    cp /usr/share/glib-2.0/schemas/gschemas.compiled "$appdir/usr/share/glib-2.0/schemas/"
-fi
-
-pixbuf_dir=$(pkg-config --variable=gdk_pixbuf_moduledir gdk-pixbuf-2.0 2>/dev/null || true)
-pixbuf_cache=$(pkg-config --variable=gdk_pixbuf_cache_file gdk-pixbuf-2.0 2>/dev/null || true)
-if [ -n "$pixbuf_dir" ] && [ -d "$pixbuf_dir" ]; then
-    mkdir -p "$appdir/usr/lib/gdk-pixbuf-2.0/loaders"
-    cp "$pixbuf_dir"/*.so "$appdir/usr/lib/gdk-pixbuf-2.0/loaders/"
-    # the cache holds absolute module paths; AppRun rewrites the placeholder to
-    # wherever the AppImage happens to be mounted
-    sed "s|$pixbuf_dir|@APPDIR@/usr/lib/gdk-pixbuf-2.0/loaders|g" "$pixbuf_cache" \
-        > "$appdir/usr/lib/gdk-pixbuf-2.0/loaders.cache"
-fi
-
 # --- deploy ---------------------------------------------------------------
 
+# Everything webkit also links has to come from the same place webkit does.
+# Bundling gtk4 next to a system libwebkitgtk built against a different gtk4 is
+# how you get missing symbols at startup, so the whole stack is excluded and
+# only the libraries that are ours alone - taglib, curl, discord-rpc - travel
+# with the bundle.
+excludes=(
+    'libwebkitgtk-6.0.so*' 'libjavascriptcoregtk-6.0.so*'
+    'libgtk-4.so*' 'libadwaita-1.so*' 'libgraphene-1.0.so*'
+    'libglib-2.0.so*' 'libgobject-2.0.so*' 'libgio-2.0.so*' 'libgmodule-2.0.so*'
+    'libgdk_pixbuf-2.0.so*' 'libjson-glib-1.0.so*' 'libsoup-3.0.so*'
+    'libpango*.so*' 'libcairo*.so*' 'libharfbuzz*.so*' 'libepoxy.so*'
+    'libgst*.so*' 'libfontconfig.so*' 'libfreetype.so*'
+)
+
+exclude_args=()
+for pattern in "${excludes[@]}"; do
+    exclude_args+=(--exclude-library "$pattern")
+done
+
 say "running linuxdeploy"
+# One invocation, not two. A second call to pack the AppDir re-runs deployment,
+# and without the exclusions repeated it happily puts the whole webkit stack
+# back in - which is exactly what the leak check below is here to catch.
+#
 # yt-dlp and ffmpeg are deliberately not listed: they are self-contained and
 # linuxdeploy would try to rewrite their rpath. Only ELF files it is told about
 # get touched, so leaving them out of the arguments is enough.
-"$linuxdeploy" \
+( cd "$work" && OUTPUT="yugen-x86_64.AppImage" "$linuxdeploy" \
     --appdir "$appdir" \
     --deploy-deps-only "$appdir/usr/bin/yugen" \
-    --deploy-deps-only "$appdir/usr/lib/webkitgtk-6.0" \
-    --deploy-deps-only "$appdir/usr/lib/gio/modules" \
-    --deploy-deps-only "$appdir/usr/lib/gdk-pixbuf-2.0/loaders" \
-    --executable /usr/bin/bwrap \
+    "${exclude_args[@]}" \
     --desktop-file "$desktop" \
     --icon-file "$root/assets/icons/yugen_256.png" \
     --icon-filename yugen \
-    --custom-apprun "$root/packaging/appimage/AppRun"
+    --custom-apprun "$root/packaging/appimage/AppRun" \
+    --output appimage )
 
-say "packing"
-( cd "$work" && OUTPUT="yugen-x86_64.AppImage" "$linuxdeploy" \
-    --appdir "$appdir" --output appimage \
-    --desktop-file "$desktop" \
-    --icon-file "$root/assets/icons/yugen_256.png" \
-    --icon-filename yugen \
-    --custom-apprun "$root/packaging/appimage/AppRun" )
+# a bundled webkit or gtk would be worse than useless: the system webkit the app
+# actually loads was built against the host's gtk, not this one
+leaked=$(ls "$appdir/usr/lib" 2>/dev/null \
+    | grep -E '^lib(webkitgtk|javascriptcoregtk|gtk-4|adwaita|glib-2|gobject-2|gio-2)' || true)
+if [ -n "$leaked" ]; then
+    rm -f "$work/yugen-x86_64.AppImage"
+    die "these leaked into the bundle: $(echo "$leaked" | tr '\n' ' ')"
+fi
 
 out="$work/yugen-x86_64.AppImage"
 [ -f "$out" ] || die "linuxdeploy produced no AppImage"
@@ -166,17 +150,15 @@ out="$work/yugen-x86_64.AppImage"
 # --- portability report ---------------------------------------------------
 
 # glibc is the one thing that cannot be bundled, so the build host decides the
-# oldest distro this will run on. Building on Arch means a very new floor.
+# oldest distro this will run on. Building on a rolling distro means a very new
+# floor; objdump exits non-zero on every non-ELF file in there, and xargs turns
+# that into a 123 that would take the whole script down after a good build.
 glibc=$(find "$appdir/usr/lib" "$appdir/usr/bin" -type f 2>/dev/null \
-    | xargs -r -I{} sh -c 'objdump -T "{}" 2>/dev/null | grep -o "GLIBC_[0-9.]*"' \
-    | sort -uV | tail -1)
+    | xargs -r -I{} sh -c 'objdump -T "{}" 2>/dev/null | grep -o "GLIBC_[0-9.]*" || true' \
+    | sort -uV | tail -1 || true)
 
 say "done: $out ($(du -h "$out" | cut -f1))"
 printf '\n'
-printf '  requires glibc %s or newer\n' "${glibc#GLIBC_}"
+printf '  requires glibc %s or newer, and webkitgtk-6.0 from the distro\n' "${glibc#GLIBC_}"
 printf '  built on: %s\n' "$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}")"
-printf '\n'
-printf '  glibc is not bundled and never can be, so this AppImage only runs on\n'
-printf '  distros at least as new as the machine that built it. For something to\n'
-printf '  hand to other people, run this script inside an older base image.\n'
 printf '\n'
