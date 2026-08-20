@@ -1966,7 +1966,9 @@ export default function App() {
                         onContextMenu={song_context(name)}
                     >
                         {current === name ? (
-                            <span className='eq'>
+                            // the bars stand for a track that is running, so a
+                            // paused one holds them where they are
+                            <span className={`eq${paused ? ' still' : ''}`}>
                                 <i />
                                 <i />
                                 <i />
