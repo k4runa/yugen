@@ -10,17 +10,28 @@ The backend is C++ — [saucer](https://github.com/saucer/saucer) for the webvie
 is React + TypeScript, built into a bundle that is baked straight into the
 executable, so the binary is all there is to run.
 
-## Download
-
-A prebuilt AppImage is on the [releases page](https://github.com/k4runa/yugen/releases):
+## Install
 
 ```sh
-wget https://github.com/k4runa/yugen/releases/download/v1.0.0/Yugen-x86_64.AppImage
-chmod +x Yugen-x86_64.AppImage
-./Yugen-x86_64.AppImage
+curl -sL https://raw.githubusercontent.com/k4runa/yugen/master/install.sh | bash
 ```
 
-It still needs `yt-dlp` and `ffmpeg` on `PATH` for search and downloads.
+It offers two options. `--appimage` and `--source` skip the prompt.
+
+**AppImage** downloads the bundle into `~/.local/bin` and writes a launcher
+entry. Nothing is installed system-wide and root is never asked for: WebKitGTK,
+`yt-dlp` and `ffmpeg` all travel inside the bundle. The two things it cannot
+carry are glibc, so the host has to be at least as new as the machine that built
+the release, and the kernel's unprivileged user namespaces, which the bundled
+WebKit needs to reach its own helper processes.
+
+**From source** installs the toolchain and the dependencies for your distro,
+puts `yt-dlp` on the nightly channel, builds, and installs into `/usr/local`.
+
+The AppImage can also be built locally with
+[`packaging/appimage/build.sh`](packaging/appimage/build.sh). Build it inside an
+old base image if you mean to hand it to anyone else — the glibc of the build
+host is the floor for every machine that runs it.
 
 ## Building
 
