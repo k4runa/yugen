@@ -62,7 +62,6 @@ namespace yugen
           std::mutex discord_mtx;
           TrackInfo discord_track;
           bool discord_running = false;
-
           // set from the ui through set_activity(), read whenever a status is
           // about to go up - atomic because those are two different threads
           std::atomic<bool> share_activity_on_dc = true;

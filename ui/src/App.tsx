@@ -1411,6 +1411,29 @@ export default function App() {
         play_music(queue[(index + offset + queue.length) % queue.length])
     }
 
+    // one source's half of a search. an answer already on file comes straight
+    // back, a request already in the air is waited on rather than doubled, and
+    // whatever lands is filed before the caller sees it - so the tab this was
+    // fetched for and the tab that asked for it both find it here later.
+    function fetch_source(on: Source, wanted: string) {
+        const key = `${on}\n${wanted}`
+        const entry = searches.current.get(key)
+
+        if (entry?.found) return Promise.resolve(entry.found)
+
+        const pending = entry?.pending ?? run_search(on, wanted)
+        if (!entry) searches.current.set(key, { pending })
+
+        return pending.then((found) => {
+            if (found.length) searches.current.set(key, { pending, found })
+            // an empty answer is not worth remembering - the empty state invites
+            // another enter, and that has to be able to actually go out
+            else searches.current.delete(key)
+
+            return found
+        })
+    }
+
     async function search(on: Source = source) {
         const wanted = query.trim()
         if (!wanted) return
@@ -1418,13 +1441,19 @@ export default function App() {
         set_search_open(true)
 
         const run = ++search_run.current
-        const key = `${on}\n${wanted}`
-        const entry = searches.current.get(key)
+
+        // both sources go out on the same enter. the tab that is not on screen
+        // costs one more yt-dlp process now and, in return, switching to it is
+        // instant instead of another wait - by then its answer is already filed
+        for (const other of SOURCES) {
+            if (other.id !== on) void fetch_source(other.id, wanted)
+        }
 
         // already answered: the list swaps over with no round trip, and without
         // blanking out on the way
-        if (entry?.found) {
-            set_results(entry.found)
+        const found_already = searches.current.get(`${on}\n${wanted}`)?.found
+        if (found_already) {
+            set_results(found_already)
             set_shown(PAGE)
             set_searching(false)
             return
@@ -1434,18 +1463,7 @@ export default function App() {
         set_shown(PAGE)
         set_searching(true)
 
-        const pending = entry?.pending ?? run_search(on, wanted)
-        if (!entry) searches.current.set(key, { pending })
-
-        const found = await pending
-
-        // the answer is filed before anything else looks at `run`: a tab switched
-        // away from mid-flight still paid for this, and going back to it should
-        // not pay again
-        if (found.length) searches.current.set(key, { pending, found })
-        // an empty answer is not worth remembering - the empty state invites
-        // another enter, and that has to be able to actually go out
-        else searches.current.delete(key)
+        const found = await fetch_source(on, wanted)
 
         // it is just not the list on screen any more
         if (run !== search_run.current) return
