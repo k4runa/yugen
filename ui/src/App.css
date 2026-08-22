@@ -1601,18 +1601,22 @@ button {
 
 .dialog input {
     padding: 0.6875rem 0.875rem;
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--line);
     border-radius: 0.875rem;
     background: var(--glass-inset);
     color: var(--text);
     font: inherit;
     outline: none;
     user-select: text;
-    transition: box-shadow var(--fast) ease;
+    transition:
+        border-color var(--fast) ease,
+        box-shadow var(--fast) ease;
 }
 
+/* the edge picks up the accent rather than growing a ring around itself */
 .dialog input:focus {
-    box-shadow: 0 0 0 3px var(--accent-soft);
+    border-color: var(--accent-glow);
+    box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .dialog .field {
