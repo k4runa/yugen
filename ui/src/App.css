@@ -2751,3 +2751,76 @@ button {
         animation: none;
     }
 }
+
+/* ---------- crop window ---------- */
+
+/* it is reached from the edit-profile dialog, which is itself an overlay, so
+   it has to sit above one rather than beside it - still under the tooltip */
+.crop-overlay {
+    z-index: 32;
+}
+
+/* it sizes itself around the square window rather than the dialog's default
+   width, so the picture and the buttons share one edge */
+.crop-dialog {
+    width: auto;
+    align-items: center;
+}
+
+.crop-view {
+    position: relative;
+    overflow: hidden;
+    border-radius: 1rem;
+    background: var(--glass-inset);
+    /* the pointer drag owns the gesture; the webview must not pan with it */
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+}
+
+.crop-view:active {
+    cursor: grabbing;
+}
+
+.crop-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: top left;
+    max-width: none;
+    -webkit-user-drag: none;
+}
+
+/* everything outside the circle is dimmed, so what is framed reads as the
+   avatar before it is one. the ring is drawn with a shadow that fills the
+   rest of the square rather than a second element */
+.crop-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    box-shadow:
+        0 0 0 100vmax hsl(0 0% 4% / 0.55),
+        inset 0 0 0 1px hsl(0 0% 100% / 0.55);
+    pointer-events: none;
+}
+
+.crop-dialog .dialog-head,
+.crop-dialog .slider {
+    width: 100%;
+}
+
+.crop-hint {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.6875rem;
+    text-align: center;
+}
+
+.crop-dialog .dialog-actions {
+    width: 100%;
+}
+
+.crop-dialog .dialog-actions .pill-btn {
+    flex: 1;
+    justify-content: center;
+}

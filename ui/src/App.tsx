@@ -776,6 +776,193 @@ const SHELVES: { id: Shelf; label: string; icon: string }[] = [
     { id: 'artists', label: 'Artists', icon: ICONS.artist },
 ]
 
+// a picked photo is almost never square, so it stops here on the way in: the
+// window below is the circle the avatar will become, and the picture is
+// dragged and zoomed behind it until the right part shows through
+const CROP_VIEW = 248 // css px of the square crop window
+const CROP_OUT = 512 // the square that is actually written back to the profile
+const CROP_ZOOM = [1, 4] as const
+
+type CropProps = {
+    src: string
+    busy: boolean
+    on_cancel: () => void
+    on_done: (data_url: string) => void
+}
+
+function CropDialog({ src, busy, on_cancel, on_done }: CropProps) {
+    const [natural, set_natural] = useState<{ w: number; h: number } | null>(null)
+    const [zoom, set_zoom] = useState(1)
+    const [offset, set_offset] = useState({ x: 0, y: 0 })
+    const img_ref = useRef<HTMLImageElement>(null)
+    const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
+
+    // whichever way the picture is long, it covers the window at zoom 1
+    const base = natural ? CROP_VIEW / Math.min(natural.w, natural.h) : 1
+    const shown = natural
+        ? { w: natural.w * base * zoom, h: natural.h * base * zoom }
+        : { w: 0, h: 0 }
+
+    // it may never uncover a corner: the offsets stay inside whatever slack the
+    // picture has over the window at this zoom
+    const hold = (x: number, y: number, w: number, h: number) => ({
+        x: Math.min(0, Math.max(CROP_VIEW - w, x)),
+        y: Math.min(0, Math.max(CROP_VIEW - h, y)),
+    })
+
+    function measure(e: React.SyntheticEvent<HTMLImageElement>) {
+        const { naturalWidth: w, naturalHeight: h } = e.currentTarget
+        const fit = CROP_VIEW / Math.min(w, h)
+
+        set_natural({ w, h })
+        set_zoom(1)
+        set_offset({ x: (CROP_VIEW - w * fit) / 2, y: (CROP_VIEW - h * fit) / 2 })
+    }
+
+    // zooming pulls towards the middle of the window rather than its top left,
+    // so whatever was framed stays framed
+    function rezoom(next: number) {
+        if (!natural) return
+
+        const step = next / zoom
+        const grown = { w: natural.w * base * next, h: natural.h * base * next }
+        const middle = CROP_VIEW / 2
+
+        set_zoom(next)
+        set_offset((o) =>
+            hold(middle - (middle - o.x) * step, middle - (middle - o.y) * step, grown.w, grown.h),
+        )
+    }
+
+    function grab(e: React.PointerEvent) {
+        if (!natural || busy) return
+
+        drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y }
+        e.currentTarget.setPointerCapture(e.pointerId)
+    }
+
+    function move(e: React.PointerEvent) {
+        const from = drag.current
+        if (!from) return
+
+        set_offset(
+            hold(
+                from.ox + (e.clientX - from.x),
+                from.oy + (e.clientY - from.y),
+                shown.w,
+                shown.h,
+            ),
+        )
+    }
+
+    // the window is square and the drawn square is square, so one drawImage
+    // with the source rectangle the offsets describe is the whole crop
+    function commit() {
+        const image = img_ref.current
+        const canvas = document.createElement('canvas')
+        canvas.width = CROP_OUT
+        canvas.height = CROP_OUT
+
+        const ctx = canvas.getContext('2d')
+        if (!image || !natural || !ctx) return
+
+        const factor = base * zoom
+        const side = CROP_VIEW / factor
+
+        // jpeg has no alpha, so a transparent png would come out on black
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, CROP_OUT, CROP_OUT)
+        ctx.drawImage(
+            image,
+            -offset.x / factor,
+            -offset.y / factor,
+            side,
+            side,
+            0,
+            0,
+            CROP_OUT,
+            CROP_OUT,
+        )
+
+        on_done(canvas.toDataURL('image/jpeg', 0.92))
+    }
+
+    return (
+        <div className='overlay crop-overlay' onClick={busy ? undefined : on_cancel}>
+            <div className='dialog crop-dialog' onClick={(e) => e.stopPropagation()}>
+                <div className='dialog-head'>
+                    <h3>Crop photo</h3>
+                    <button
+                        className='icon-btn tiny'
+                        {...tip('Close')}
+                        disabled={busy}
+                        onClick={on_cancel}
+                    >
+                        <Icon d={ICONS.close} size={15} />
+                    </button>
+                </div>
+
+                <div
+                    className='crop-view'
+                    style={{ width: CROP_VIEW, height: CROP_VIEW }}
+                    onPointerDown={grab}
+                    onPointerMove={move}
+                    onPointerUp={() => (drag.current = null)}
+                    onPointerCancel={() => (drag.current = null)}
+                    onWheel={(e) =>
+                        rezoom(clamp(zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08), CROP_ZOOM))
+                    }
+                >
+                    <img
+                        ref={img_ref}
+                        className='crop-img'
+                        src={src}
+                        alt=''
+                        draggable={false}
+                        onLoad={measure}
+                        style={{
+                            width: shown.w,
+                            height: shown.h,
+                            transform: `translate(${offset.x}px, ${offset.y}px)`,
+                        }}
+                    />
+                    {/* the circle is only a guide - it is painted over the
+                        picture and takes no clicks, so the drag underneath it
+                        keeps working across the whole window */}
+                    <div className='crop-ring' />
+                </div>
+
+                <input
+                    className='slider'
+                    type='range'
+                    min={CROP_ZOOM[0]}
+                    max={CROP_ZOOM[1]}
+                    step={0.01}
+                    value={zoom}
+                    disabled={!natural || busy}
+                    aria-label='Zoom'
+                    onChange={(e) => rezoom(Number(e.currentTarget.value))}
+                />
+
+                <p className='crop-hint'>Drag the photo to move it, and the slider to zoom.</p>
+
+                <div className='dialog-actions'>
+                    <button className='pill-btn' disabled={busy} onClick={on_cancel}>
+                        Cancel
+                    </button>
+                    <button
+                        className='pill-btn primary'
+                        disabled={!natural || busy}
+                        onClick={commit}
+                    >
+                        {busy ? <span className='spinner' /> : 'Save'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
 export default function App() {
     // read once, off the last tick the previous run wrote
     const saved_playback = useMemo(stored_playback, [])
@@ -801,6 +988,8 @@ export default function App() {
     const [username_draft, set_username_draft] = useState('')
     const [bio_draft, set_bio_draft] = useState('')
     const [avatar_busy, set_avatar_busy] = useState(false)
+    // the photo waiting to be cropped, held as a data url while the window is up
+    const [crop_src, set_crop_src] = useState('')
 
     const [volume, set_volume_state] = useState(1)
     // what unmuting goes back to, so the level survives a trip through zero
@@ -2074,16 +2263,22 @@ export default function App() {
         })
     }
 
+    // the picked file does not go straight to the profile: it opens the crop
+    // window first, and only what is framed there is ever written
     async function pick_avatar(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.currentTarget.files?.[0]
         e.currentTarget.value = ''
         if (!file) return
 
+        set_crop_src(await read_as_data_url(file))
+    }
+
+    async function save_avatar(data_url: string) {
         set_avatar_busy(true)
         try {
-            const data_url = await read_as_data_url(file)
             const ok = await bridge().set_profile_picture(data_url)
             if (ok) set_profile_pic(await bridge().get_profile_picture())
+            set_crop_src('')
         } finally {
             set_avatar_busy(false)
         }
@@ -3392,6 +3587,15 @@ export default function App() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {crop_src && (
+                <CropDialog
+                    src={crop_src}
+                    busy={avatar_busy}
+                    on_cancel={() => set_crop_src('')}
+                    on_done={save_avatar}
+                />
             )}
 
             {profile_edit_open && (
