@@ -1,6 +1,3 @@
-#include <cstddef>
-#include <pwd.h>
-#include <unistd.h>
 #define MINIAUDIO_IMPLEMENTATION
 
 #ifndef APPLICATION_ID
@@ -17,6 +14,9 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <cstddef>
+#include <pwd.h>
+#include <unistd.h>
 
 // third party
 #include <coco/stray/stray.hpp>
@@ -138,6 +138,9 @@ coco::stray start(saucer::application* app)
      }
 
      fs::create_directories(yugen::data_dir());
+     // after the directory, not before: init() writes the last.fm key into it
+     // and an ofstream will not make the path itself
+     mm::init();
 
      window->set_title("yugen");
 

@@ -153,6 +153,9 @@ namespace yugen
      class MusicManager
      {
           public:
+               // called once at startup, after the data directory is there:
+               // puts the last.fm key on disk if this run is the one that has it
+               static void init();
                // playlists
                static bool rename_playlist(const std::string& playlist_name, const std::string& new_playlist_name);
                static bool remove_from_playlist(const std::string& playlist_name, const std::string& file_path);
@@ -185,6 +188,10 @@ namespace yugen
           private:
                static bool save_playlists(const json& data);
                static json load_playlists();
+
+               // the last.fm key - environment first, then the file init()
+               // wrote. read once and shared, see the definition
+               static const std::string& api_key(); 
      };
 
      class Profile

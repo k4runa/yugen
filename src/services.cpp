@@ -53,6 +53,10 @@ namespace yugen
           // picture of, recognised by the hash in its url so that a suggestion
           // carrying nothing is handed over as carrying nothing
           constexpr const char* PLACEHOLDER      = "2a96cbd8b46e442fc41c2b86b821562f";
+          // where the last.fm key is kept once it has been seen once, beside
+          // everything else the player owns. plain text rather than json: it is
+          // one line, and install.sh writes it too.
+          constexpr const char* API_KEY_FILE     = "/lastfm_key"; 
           constexpr const char* PROFILE_FILE     = "/profile.json";
           constexpr const char* LIKED_SONGS_FILE = "/liked_songs.json";
           constexpr const char* COVERS_FILE      = "/covers.json";
@@ -63,11 +67,13 @@ namespace yugen
           // application on discord's developer portal, named by its key
           constexpr const char* DISCORD_LOGO_ASSET = "yugen";
 
-          // read out of the environment once, at load, and never again: nothing
-          // sets it later, so a run started without it stays without it. the
-          // recommendation calls are the only ones that need it, and they say so
-          // and give up rather than asking last.fm without one.
-          const char* API_KEY =  getenv("LASTFM_API_KEY");
+          // the key as the environment had it at startup, which is only how it
+          // arrives the first time - init() puts it on disk and api_key() is
+          // what everything reads afterwards. getenv answers with nothing at all
+          // when the variable was never set, and a std::string cannot be built
+          // from that, so it is checked before it is used.
+          const char* env = getenv("LASTFM_API_KEY");
+          std::string API_KEY = env ? env : "";
 
           // the last track handed to publish_activity(), kept so that turning
           // sharing back on can put it up again right away
@@ -1205,7 +1211,7 @@ namespace yugen
           
           std::string url = "https://ws.audioscrobbler.com/2.0/?method=track.getsimilar";
 
-          if(!API_KEY) {
+          if(api_key().empty()) {
                std::println("[WARNING] NO LASTFM API KEY FOUND.");
                return "";
           }
@@ -1231,7 +1237,7 @@ namespace yugen
                curl_free(enc); 
           }
 
-          url += "&api_key=" + std::string(API_KEY) 
+          url += "&api_key=" + api_key()
           + "&format=json&autocorrect=1" + "&limit=" + std::to_string(limit);
 
           curl_easy_cleanup(curl);
@@ -1325,7 +1331,7 @@ namespace yugen
       */
      std::string MusicManager::get_track_cover(const std::string& artist, const std::string& track_name)
      {
-          if(!API_KEY) {
+          if(api_key().empty()) {
                std::println("[WARNING] NO LASTFM API KEY FOUND.");
                return "";
           }
@@ -1347,7 +1353,7 @@ namespace yugen
                curl_free(enc);
           }
 
-          url += "&api_key=" + std::string(API_KEY) + "&format=json";
+          url += "&api_key=" + api_key() + "&format=json";
 
           curl_easy_cleanup(curl);
           
@@ -1375,5 +1381,64 @@ namespace yugen
           }
 
           return "";
+     }
+
+     /*
+      * Keeps the key across runs.
+      *
+      * An `export` only lives in the shell that ran it: the app started from a
+      * launcher next time - or from any other terminal - would come up without
+      * one. So the first run that does have it writes it down, and every run
+      * after that reads the file instead. Called once at startup, after the
+      * data directory exists: an ofstream cannot make the directory itself, and
+      * this failing quietly would look exactly like a key that never worked.
+      *
+      * A key already on disk is left alone. Nothing here is worth stopping the
+      * app over, so a filesystem that will not cooperate is reported and
+      * stepped over - it costs suggestions, not the player.
+      */
+     void MusicManager::init()
+     {
+          const std::string path = data_dir() + API_KEY_FILE;
+          try {
+               if(!fs::exists(path)) {
+                    if(!API_KEY.empty()) {
+                         std::ofstream f(path);
+                         if(!f.is_open()) return;
+                         f << API_KEY;
+                    }
+               }
+          } catch (const fs::filesystem_error& e) {
+               std::println("[WARN] Filesystem error: {}", e.what());
+          }
+     }
+
+     /*
+      * The key, wherever it is. The environment wins, since it is the one that
+      * can be changed without touching anything, and the file init() left is
+      * the fallback.
+      *
+      * Read once and kept: these two calls go out on a thread each and the ui
+      * fires four of them at a time, so a value everyone parses for themselves
+      * is a race rather than a saving. A function-local static is initialised by
+      * whichever thread arrives first while the rest wait, and it is const
+      * afterwards - nobody writes to it again.
+      *
+      * >> stops at the first space, which is what trims the newline off a file
+      * written by a shell.
+      */
+     const std::string& MusicManager::api_key()
+     {
+          static const std::string key = [] {
+               const char* env = getenv("LASTFM_API_KEY");
+               if(env && *env) return std::string(env);
+
+               std::ifstream f(data_dir() + API_KEY_FILE);
+               std::string k;
+               if(f) f >> k;
+               return k;
+          }();
+
+          return key;
      }
 }
