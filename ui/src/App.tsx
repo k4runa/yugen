@@ -2942,7 +2942,7 @@ export default function App() {
 
     // one suggestion, built like every other card on the page: a cover, a
     // title, an artist. what makes it different is that it is not here yet, so
-    // the click asks whether to fetch it rather than playing anything.
+    // the badge fetches it and a right-click asks first.
     function suggestion_card(track: Suggestion) {
         const busy = getting.includes(track.key)
         const here = library_keys.has(track.key) || fetched.includes(track.key)
@@ -2960,9 +2960,9 @@ export default function App() {
                           ? 'Downloading...'
                           : gone
                             ? 'Nothing to download under that name'
-                            : 'Download',
+                            : 'Download it with the button, right-click for more',
                 )}
-                onClick={(e) => !held && context({ kind: 'suggestion', track })(e)}
+                onContextMenu={(e) => !held && context({ kind: 'suggestion', track })(e)}
             >
                 <img
                     className='album-cover'
@@ -2974,7 +2974,18 @@ export default function App() {
                     onError={(e) => e.currentTarget.classList.add('gone')}
                 />
 
-                <span className={`badge${held ? ' on' : ''}`}>
+                <button
+                    type='button'
+                    className={`badge${held ? ' on' : ''}`}
+                    disabled={held}
+                    aria-label={here ? 'Already in your library' : 'Download'}
+                    // the badge is the button: it fetches straight away. the
+                    // question is still there, one right-click away on the card
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        if (!held) void download_suggestion(track)
+                    }}
+                >
                     {here ? (
                         <Icon d={ICONS.check} size={14} />
                     ) : busy ? (
@@ -2982,7 +2993,7 @@ export default function App() {
                     ) : (
                         <Icon d={ICONS.download} size={14} />
                     )}
-                </span>
+                </button>
 
                 <div className='title ellipsis'>{track.title}</div>
                 <div className='muted ellipsis'>

@@ -1262,6 +1262,19 @@ button {
         transform var(--fast) var(--spring);
 }
 
+/* on a suggestion the badge is a real button, so it drops the browser's own
+   look and keeps the one above */
+button.badge {
+    padding: 0;
+    border: 0;
+    font: inherit;
+    cursor: pointer;
+}
+
+button.badge:disabled {
+    cursor: default;
+}
+
 /* it stays on while it is the answer to something, not just an offer */
 .album:hover .badge,
 .album .badge.on {
