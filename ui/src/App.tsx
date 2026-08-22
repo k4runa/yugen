@@ -159,7 +159,11 @@ const group_key = (tag: string) => tag.trim() || 'Unknown'
 
 // right-click targets: a track, a playlist in the sidebar, or the sidebar itself
 type MenuTarget =
-    { kind: 'song'; song: string } | { kind: 'playlist'; playlist: string } | { kind: 'sidebar' }
+    | { kind: 'song'; song: string }
+    | { kind: 'playlist'; playlist: string }
+    | { kind: 'sidebar' }
+    // a track that is not here yet: the menu is where it is fetched from
+    | { kind: 'suggestion'; track: Suggestion }
 
 type Menu = MenuTarget & { x: number; y: number }
 
@@ -175,6 +179,25 @@ const SORTS: { id: Sort; label: string }[] = [
     { id: 'artist', label: 'Artist' },
     { id: 'album', label: 'Album' },
 ]
+
+// how many of a thing a shelf on the library page holds
+const SHELF = 10
+
+// how many suggestions a full shelf holds, and how deep the pass is allowed to
+// dig for them: last.fm rarely has a picture on the similar list itself, so
+// most of what is found costs one more request before it can be shown
+const SUGGESTIONS = 50
+const CANDIDATES = SUGGESTIONS * 2
+
+// the collection's size in time: hours once there are any, minutes below that
+function format_span(seconds: number) {
+    if (!seconds) return ''
+
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.round((seconds % 3600) / 60)
+
+    return hours ? `${hours}h ${minutes}m` : `${minutes}m`
+}
 
 const LAYOUTS: { id: Layout; label: string }[] = [
     { id: 'list', label: 'List' },
@@ -275,6 +298,100 @@ function library_mark(name: string) {
 // filesystem will not take - so a title comparison keeps letters and digits only
 const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
 
+/* ---------- what else there is ---------- */
+
+// the backend answers for one track at a time by design, so a pass is many
+// small calls rather than one big one: a sample of the tracks the listener has
+// actually marked, each asked about on its own.
+const SEEDS = [15, 25] as const
+const PER_SEED = [6, 8] as const
+
+// what is on screen before 'show more'
+const SUGGESTION_PAGE = 20
+
+// every call runs on a thread of its own on the far side and ends in a request
+// to last.fm, which asks for about five a second: the work is walked a few at a
+// time rather than all at once, and this is the width of that walk
+const LANES = 4
+
+type Suggestion = {
+    // artist and title folded together: what tells two answers apart, and what
+    // a track already on disk is recognised by
+    key: string
+    artist: string
+    title: string
+    // last.fm's own artwork for the track, as a url. a suggestion without one
+    // never reaches the screen, so this is always set by the time it is read.
+    image: string
+    // how close last.fm thinks it is to the seed, which is the order they read in
+    match: number
+}
+
+/*
+ * The backend hands its answer over as text - one json library in the binary is
+ * enough, and the one it has is not the one saucer serialises with - so the
+ * reading is done here. Anything that does not come back as an array is a seed
+ * with nothing to say, which is the same as an empty one: a pass carries on
+ * around it rather than failing over it.
+ */
+function as_similar(answer: string): SimilarTrack[] {
+    if (!answer) return []
+
+    try {
+        const parsed = JSON.parse(answer)
+
+        return Array.isArray(parsed) ? parsed : []
+    } catch {
+        return []
+    }
+}
+
+// the one grey star last.fm hands back for everything it has no picture for.
+// get_similar already drops it on the way over; get_track_cover does not, and
+// that is the call nearly every card ends up going through.
+const NO_PICTURE = '2a96cbd8b46e442fc41c2b86b821562f'
+
+const picture = (url?: string) => {
+    const src = (url ?? '').trim()
+
+    return src.startsWith('http') && !src.includes(NO_PICTURE) ? src : ''
+}
+
+const between = ([min, max]: readonly [number, number]) =>
+    min + Math.floor(Math.random() * (max - min + 1))
+
+// a partial fisher-yates: only as much of the pool as is actually wanted gets
+// shuffled, and the pool itself is left alone
+function sample<T>(pool: T[], count: number) {
+    const rest = [...pool]
+    const wanted = Math.min(count, rest.length)
+
+    for (let i = 0; i < wanted; i++) {
+        const pick = i + Math.floor(Math.random() * (rest.length - i))
+        ;[rest[i], rest[pick]] = [rest[pick], rest[i]]
+    }
+
+    return rest.slice(0, wanted)
+}
+
+// a fixed number of workers over one list: whichever lane comes free takes the
+// next seed, so a slow one holds up nothing but itself
+async function in_lanes<T, R>(items: T[], lanes: number, work: (item: T) => Promise<R>) {
+    const done: R[] = new Array(items.length)
+    let next = 0
+
+    await Promise.all(
+        Array.from({ length: Math.min(lanes, items.length) }, async () => {
+            while (next < items.length) {
+                const index = next++
+                done[index] = await work(items[index])
+            }
+        }),
+    )
+
+    return done
+}
+
 // the functions main.cpp exposes through saucer
 type Bridge = {
     fetch_songs(path: string): Promise<string[]>
@@ -341,6 +458,26 @@ type Bridge = {
     get_favorite_songs(): Promise<FavoriteTrack[]>
     add_favorite_song(track: FavoriteTrack): Promise<boolean>
     remove_from_favorites(file_path: string): Promise<boolean>
+    // one track in, the tracks last.fm puts next to it out - as json text
+    // rather than an array, see as_similar. the path is read off disk to know
+    // what is being asked about, the limit is per track, and an answer of ''
+    // means the far side had no api key to ask with.
+    get_similar(file_path: string, limit: number): Promise<string>
+    // the artwork last.fm carries on a track's own page, as a url. it is the
+    // album's picture rather than the track's, and unlike the similar list it
+    // is handed over as it came - placeholder and all, see picture().
+    get_track_cover(artist: string, track_name: string): Promise<string>
+}
+
+// what get_similar answers with, once the text has been read. the backend
+// rebuilds each entry rather than passing last.fm's own on, so the image is
+// blank wherever it only had the placeholder - which is most of them, and what
+// get_track_cover is for. the closeness is whatever json it was written as.
+type SimilarTrack = {
+    name: string
+    artist: string
+    image: string
+    match: string | number
 }
 
 type FavoriteTrack = {
@@ -364,6 +501,30 @@ declare global {
 // it is off everywhere and .tip below replaces it. spread onto anything that needs
 // a label: the same string doubles as the accessible name for the icon-only buttons.
 const tip = (text: string) => ({ 'data-tip': text, 'aria-label': text })
+
+/*
+ * A row that runs sideways has no vertical scroll of its own, so a wheel over it
+ * would move the page underneath instead - and the row it is pointing at would
+ * sit there. This turns the wheel a quarter turn for as long as the pointer is
+ * over one. The listener has to be native and non-passive: react's own wheel
+ * handler cannot cancel the page's scroll.
+ */
+const sideways = (box: HTMLElement | null) => {
+    if (!box) return
+
+    const on_wheel = (event: WheelEvent) => {
+        // a trackpad already swiping sideways is left alone
+        if (box.scrollWidth <= box.clientWidth) return
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+
+        event.preventDefault()
+        box.scrollLeft += event.deltaY
+    }
+
+    box.addEventListener('wheel', on_wheel, { passive: false })
+
+    return () => box.removeEventListener('wheel', on_wheel)
+}
 
 // saucer injects the bridge on the window at runtime
 const bridge = () => window.saucer.exposed
@@ -1098,6 +1259,23 @@ export default function App() {
     const [downloading, set_downloading] = useState<string[]>([])
     const [source, set_source] = useState<Source>('yt')
     const [search_open, set_search_open] = useState(false)
+
+    // a pass costs one request per seed, so what it turned up is kept until the
+    // refresh button asks for another one
+    const [similar, set_similar] = useState<Suggestion[]>([])
+    const [similar_busy, set_similar_busy] = useState(false)
+    const [cards_shown, set_cards_shown] = useState(SUGGESTION_PAGE)
+    // a pass left in the air must not land on top of the one that replaced it
+    const similar_run = useRef(0)
+    const asked_similar = useRef(false)
+    // suggestions being fetched, the ones that came in, and the ones youtube had
+    // nothing for. all keyed by the suggestion, so a card answers for itself.
+    // 'fetched' is kept because a download is named after the search result
+    // rather than the suggestion, and the two names do not always fold together
+    // - the card would otherwise still be offering what it just brought in.
+    const [getting, set_getting] = useState<string[]>([])
+    const [fetched, set_fetched] = useState<string[]>([])
+    const [missing, set_missing] = useState<string[]>([])
 
 
     useEffect(() => {
@@ -1874,6 +2052,219 @@ export default function App() {
     const liked_songs = songs.filter((name) => liked.has(name))
     const groups = view === 'albums' ? albums : view === 'artists' ? artists : null
 
+    // the library page is what has been marked, what has just arrived, and what
+    // could come next - ten at a time, and no further. every other view is a
+    // listing of tracks, and those are read the way they always were.
+    const overview = view === 'library' && !selection
+
+    /*
+     * Suggestions. The backend answers about one track at a time - that is the
+     * shape of the last.fm call behind it - so a pass picks a sample of the
+     * tracks the listener has already marked and asks about each of them, a few
+     * at a time. What comes back are tracks that are not here yet, which is why
+     * a click on one goes to the search rather than to the player.
+     */
+
+    // what a suggestion is measured against: something already on disk is not
+    // one. the tags and the file name both count - a download names the file
+    // after the search result, which is where the tags may not have reached.
+    const library_keys = useMemo(() => {
+        const keys = new Set<string>()
+
+        for (const name of songs) {
+            keys.add(fold(artist_of(name) + title_of(name)))
+            keys.add(fold(library_mark(name).title))
+        }
+
+        return keys
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- both helpers read metadata_map
+    }, [songs, metadata_map])
+
+    // the seeds: liked and favourite alike, each one only once. a favourite that
+    // has since left the folder is not one - the backend reads the file to know
+    // what it is asking about.
+    const seeds = useMemo(() => {
+        const on_disk = new Set(songs)
+        const pool = new Set(songs.filter((name) => liked.has(name)))
+
+        for (const track of favorites) {
+            if (on_disk.has(track.file_path)) pool.add(track.file_path)
+        }
+
+        return [...pool]
+    }, [songs, liked, favorites])
+
+    /*
+     * The shelf is filled rather than filtered. Last.fm hardly ever carries a
+     * picture on the similar list itself - what it sends is one grey star for
+     * everything - so nearly every suggestion costs a second request before it
+     * can be shown, and a suggestion with no picture is not shown at all.
+     *
+     * So the candidates are walked in order of closeness, a few at a time, and
+     * the walk stops the moment the shelf is full: whatever is left over would
+     * have been another request for a card nobody scrolls to.
+     */
+    async function with_pictures(tracks: Suggestion[], wanted: number, alive: () => boolean) {
+        const filled: Suggestion[] = []
+        let next = 0
+
+        await Promise.all(
+            Array.from({ length: Math.min(LANES, tracks.length) }, async () => {
+                while (filled.length < wanted && next < tracks.length && alive()) {
+                    const track = tracks[next++]
+
+                    const image =
+                        track.image ||
+                        picture(
+                            await bridge()
+                                .get_track_cover(track.artist, track.title)
+                                .catch(() => ''),
+                        )
+
+                    if (image) filled.push({ ...track, image })
+                }
+            }),
+        )
+
+        // the lanes finish out of turn, so the order is put back afterwards
+        return filled.sort((a, b) => b.match - a.match)
+    }
+
+    async function load_similar() {
+        if (!seeds.length || similar_busy) return
+
+        const run = ++similar_run.current
+
+        asked_similar.current = true
+
+        // the folder before the spinner, and not the other way around: the very
+        // first pass is kicked off by the page opening, and react wants nothing
+        // set on the way through an effect
+        const dir = await music_dir()
+
+        set_similar_busy(true)
+        set_cards_shown(SUGGESTION_PAGE)
+
+        try {
+            const picked = sample(seeds, between(SEEDS))
+
+            const answers = await in_lanes(picked, LANES, (name) =>
+                bridge()
+                    .get_similar(dir + name, between(PER_SEED))
+                    .then(as_similar)
+                    // no api key, no network, a track last.fm has never heard
+                    // of: all of them are a seed with nothing to say, and the
+                    // pass carries on with the ones that do
+                    .catch(() => [] as SimilarTrack[]),
+            )
+
+            // it is just not the pass on screen any more
+            if (run !== similar_run.current) return
+
+            // the seeds are how the list is gathered, not how it is read: what
+            // comes back is one list, and the same track answering for two
+            // seeds is still one suggestion
+            const seen = new Set<string>()
+            const found: Suggestion[] = []
+
+            for (const answer of answers) {
+                for (const track of answer ?? []) {
+                    // parsed text rather than a typed answer: every field is
+                    // whatever last.fm happened to put there, including nothing
+                    const title = String(track?.name ?? '').trim()
+                    const artist = String(track?.artist ?? '').trim()
+
+                    if (!title) continue
+
+                    const key = fold(artist + title)
+                    if (seen.has(key) || library_keys.has(key)) continue
+
+                    seen.add(key)
+                    found.push({
+                        key,
+                        title,
+                        artist,
+                        image: picture(String(track?.image ?? '')),
+                        // it is an order, not a label, and last.fm has sent
+                        // it as text before now
+                        match: Number(track?.match) || 0,
+                    })
+                }
+            }
+
+            // closest first, and only as deep as the shelf could ever need
+            const candidates = found
+                .sort((a, b) => b.match - a.match)
+                .slice(0, CANDIDATES)
+
+            const shown = await with_pictures(
+                candidates,
+                SUGGESTIONS,
+                () => run === similar_run.current,
+            )
+
+            if (run !== similar_run.current) return
+
+            set_similar(shown)
+        } finally {
+            if (run === similar_run.current) set_similar_busy(false)
+        }
+    }
+
+    // the first pass waits until the library page is actually open: it is a
+    // round trip per seed, and a launch straight into a playlist should not pay
+    // for one. after that it stands until the refresh button asks again.
+    useEffect(() => {
+        if (asked_similar.current || profile_open || !overview) return
+        if (!seeds.length) return
+
+        // started off the effect rather than in it: the pass sets nothing until
+        // it has the music folder back, but a plain call here still reads as a
+        // synchronous one
+        void Promise.resolve().then(load_similar)
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- the cue is the page and the seeds
+    }, [profile_open, overview, seeds])
+
+    const suggestion_name = (track: Suggestion) =>
+        [track.artist, track.title].filter(Boolean).join(' - ')
+
+    /*
+     * A suggestion is a track that is not here yet, and unlike a search result
+     * it carries no id to fetch by - only a name. So the name goes back out
+     * through the same youtube search the box uses, and the first answer is
+     * what gets downloaded. The menu is where this is asked for: a click that
+     * quietly started a download would be the worst of both.
+     */
+    async function download_suggestion(track: Suggestion) {
+        const here = library_keys.has(track.key) || fetched.includes(track.key)
+        if (getting.includes(track.key) || here) return
+
+        set_getting((busy) => [...busy, track.key])
+        set_missing((gone) => gone.filter((key) => key !== track.key))
+
+        try {
+            const found = await fetch_source('yt', suggestion_name(track))
+            const best = found.find((result) => !owns(result)) ?? found[0]
+
+            // last.fm knows tracks youtube does not always carry, and a name
+            // that turns up nothing is not an error - it is an answer
+            if (!best) {
+                set_missing((gone) => [...gone, track.key])
+                return
+            }
+
+            await bridge().download_yt(best.ref, await music_dir())
+
+            set_fetched((done) => [...done, track.key])
+            await fetch_songs()
+            await sync_liked()
+        } catch {
+            set_missing((gone) => [...gone, track.key])
+        } finally {
+            set_getting((busy) => busy.filter((key) => key !== track.key))
+        }
+    }
+
     // newest first for dates, alphabetical for the rest
     const by_sort = (a: string, b: string) =>
         sort === 'added'
@@ -1901,10 +2292,11 @@ export default function App() {
                 ? [...liked_songs].sort(by_sort)
                 : [...songs].sort(by_sort)
 
-    // anything that is a list of tracks is arranged by the menu: the library, an
-    // album or an artist opened up, a playlist, the liked songs. the album and
-    // artist overviews are cards of groups rather than tracks, so they are not.
-    const tunable = !groups || !!selection
+    // anything that is a list of tracks is arranged by the menu: home, an album
+    // or an artist opened up, a playlist, the liked songs. the album and artist
+    // overviews are cards of groups rather than tracks, and the library page is
+    // ten of this and ten of that, so none of those are.
+    const tunable = (!groups || !!selection) && !overview
 
     // each of them remembers its own layout, because they are read differently -
     // a library is browsed by cover, a playlist is read down the list
@@ -1926,6 +2318,34 @@ export default function App() {
 
     // prev/next walk the shuffled order when shuffle is on, otherwise the view order
     const listed_key = listed.join('\u0000')
+
+    // the newest of what is here. files with no date on them cannot answer,
+    // so the shelf goes away with them.
+    const arrivals = useMemo(
+        () =>
+            songs
+                .filter((name) => added_of(name))
+                .sort((a, b) => added_of(b) - added_of(a))
+                .slice(0, SHELF),
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- added_of reads metadata_map
+        [songs, metadata_map],
+    )
+
+    // how long it would take to hear all of it once. a file whose length never
+    // came back counts as nothing rather than holding the sum up.
+    const total_span = useMemo(
+        () => songs.reduce((total, name) => total + length_of(name), 0),
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- length_of reads metadata_map
+        [songs, metadata_map],
+    )
+
+    // a shelf is a row of covers, so it wants enough of them to read as one:
+    // under four it is a gap with a heading on top, and the page is better off
+    // without it. the suggestions go by the seeds instead - nothing marked yet
+    // means the pass could only come back empty.
+    const has_arrivals = overview && arrivals.length >= 4
+    const has_more = overview && seeds.length > 0
+
     const queue = shuffle_on && shuffled?.key === listed_key ? shuffled.order : listed
 
     // the backend owns the shuffling, so re-ask whenever the toggle or the listing changes
@@ -2193,7 +2613,14 @@ export default function App() {
         e.preventDefault()
         e.stopPropagation()
 
-        const height = target.kind === 'song' ? 230 : target.kind === 'playlist' ? 150 : 70
+        const height =
+            target.kind === 'song'
+                ? 230
+                : target.kind === 'playlist'
+                  ? 150
+                  : target.kind === 'suggestion'
+                    ? 120
+                    : 70
 
         set_submenu(false)
         set_menu({
@@ -2450,6 +2877,183 @@ export default function App() {
                         <div className='muted'>{tracks.length} tracks</div>
                     </div>
                 ))}
+            </section>
+        )
+    }
+
+    // one block of the library page: what it is, where the rest of it lives,
+    // and ten covers. every block is the same shape, so the page reads as one
+    // thing rather than four.
+    function shelf(label: string, names: string[], go?: () => void, note?: string) {
+        return (
+            <section className='block'>
+                <div className='shelf-head'>
+                    <span className='eyebrow'>{label}</span>
+                    {note && <span className='muted'>{note}</span>}
+                    {go && (
+                        <button className='see-all' onClick={go}>
+                            See all
+                            <Icon d={ICONS.chevron} size={13} />
+                        </button>
+                    )}
+                </div>
+
+                {track_cards(names)}
+            </section>
+        )
+    }
+
+    function library_page() {
+        const on_disk = new Set(songs)
+        // a favourite whose file has left the folder cannot be played, so it is
+        // not on the shelf either
+        const favorite_songs = favorites
+            .map((track) => track.file_path)
+            .filter((name) => on_disk.has(name))
+
+        const empty = !favorite_songs.length && !liked_songs.length && !has_arrivals
+
+        return (
+            <>
+                {favorite_songs.length > 0 &&
+                    shelf('Favorites', favorite_songs.slice(0, SHELF), () =>
+                        set_profile_open(true),
+                    )}
+
+                {liked_songs.length > 0 &&
+                    shelf('Liked', liked_songs.slice(0, SHELF), () => open_view('liked'))}
+
+                {has_arrivals &&
+                    shelf(
+                        'New arrivals',
+                        arrivals,
+                        undefined,
+                        `last added ${format_date(added_of(arrivals[0])).toLowerCase()}`,
+                    )}
+
+                {empty && (
+                    <p className='empty'>
+                        Nothing marked yet. Like or favourite a track and it lands here.
+                    </p>
+                )}
+            </>
+        )
+    }
+
+    // one suggestion, built like every other card on the page: a cover, a
+    // title, an artist. what makes it different is that it is not here yet, so
+    // the click asks whether to fetch it rather than playing anything.
+    function suggestion_card(track: Suggestion) {
+        const busy = getting.includes(track.key)
+        const here = library_keys.has(track.key) || fetched.includes(track.key)
+        const gone = missing.includes(track.key)
+        const held = busy || here
+
+        return (
+            <div
+                key={track.key}
+                className={`album suggestion${here ? ' owned' : ''}${busy ? ' busy' : ''}`}
+                {...tip(
+                    here
+                        ? 'Already in your library'
+                        : busy
+                          ? 'Downloading...'
+                          : gone
+                            ? 'Nothing to download under that name'
+                            : 'Download',
+                )}
+                onClick={(e) => !held && context({ kind: 'suggestion', track })(e)}
+            >
+                <img
+                    className='album-cover'
+                    src={track.image}
+                    alt=''
+                    loading='lazy'
+                    // the url came from last.fm and the picture is fetched from
+                    // whatever host it names: it can simply not be there
+                    onError={(e) => e.currentTarget.classList.add('gone')}
+                />
+
+                <span className={`badge${held ? ' on' : ''}`}>
+                    {here ? (
+                        <Icon d={ICONS.check} size={14} />
+                    ) : busy ? (
+                        <span className='spinner' />
+                    ) : (
+                        <Icon d={ICONS.download} size={14} />
+                    )}
+                </span>
+
+                <div className='title ellipsis'>{track.title}</div>
+                <div className='muted ellipsis'>
+                    {here
+                        ? 'In your library'
+                        : busy
+                          ? 'Downloading...'
+                          : gone
+                            ? 'Nothing found'
+                            : track.artist || 'Unknown artist'}
+                </div>
+            </div>
+        )
+    }
+
+    // the last block of the library page: what the shelves above it point at.
+    // it is built the same way they are, because it is the same kind of thing -
+    // records to look at - and only the click underneath differs.
+    function suggestions() {
+        return (
+            <section className='block discover'>
+                <div className='shelf-head'>
+                    <span className='eyebrow'>Suggested for you</span>
+                    <span className='muted'>
+                        {similar_busy && !similar.length
+                            ? 'asking around...'
+                            : `${similar.length} tracks`}
+                    </span>
+
+                    <button
+                        className={`see-all${similar_busy ? ' busy' : ''}`}
+                        aria-disabled={similar_busy}
+                        onClick={() => load_similar()}
+                    >
+                        <Icon d={ICONS.refresh} size={13} />
+                        Another pass
+                    </button>
+                </div>
+
+                {similar.length ? (
+                    <>
+                        <section className='card-row'>
+                            {similar.slice(0, cards_shown).map(suggestion_card)}
+                        </section>
+
+                        {similar.length > cards_shown && (
+                            <button
+                                className='pill-btn more-seeds'
+                                onClick={() => set_cards_shown(cards_shown + SUGGESTION_PAGE)}
+                            >
+                                Show more
+                            </button>
+                        )}
+                    </>
+                ) : similar_busy ? (
+                    // the shape of the shelf, so the page does not jump when it lands
+                    <section className='card-row'>
+                        {Array.from({ length: 6 }, (_, i) => (
+                            <div key={i} className='album skeleton'>
+                                <div className='album-cover placeholder' />
+                                <div className='bar' />
+                                <div className='bar short' />
+                            </div>
+                        ))}
+                    </section>
+                ) : (
+                    <p className='empty'>
+                        Nothing came back this time. Like or favourite a few more tracks,
+                        or try another pass.
+                    </p>
+                )}
             </section>
         )
     }
@@ -2737,7 +3341,7 @@ export default function App() {
                         </button>
                     </div>
 
-                    <div className='shelf-chips'>
+                    <div className='shelf-chips' ref={sideways}>
                         {SHELVES.map((option) => (
                             <button
                                 key={option.id}
@@ -3197,6 +3801,25 @@ export default function App() {
                             )}
                         </div>
 
+                        {/* what the collection amounts to, and the three ways
+                            into it that are not this page */}
+                        {overview && songs.length > 0 && (
+                            <div className='facts'>
+                                {total_span > 0 && (
+                                    <span className='fact-span'>{format_span(total_span)}</span>
+                                )}
+                                <button className='fact' onClick={() => open_view('albums')}>
+                                    <b>{albums.size}</b> albums
+                                </button>
+                                <button className='fact' onClick={() => open_view('artists')}>
+                                    <b>{artists.size}</b> artists
+                                </button>
+                                <button className='fact' onClick={() => open_view('liked')}>
+                                    <b>{liked_songs.length}</b> liked
+                                </button>
+                            </div>
+                        )}
+
                         {groups && !selection ? (
                             groups.size ? (
                                 group_cards(groups, view === 'artists')
@@ -3204,7 +3827,9 @@ export default function App() {
                                 <p className='empty'>Nothing to group yet.</p>
                             )
                         ) : listed.length ? (
-                            layout === 'list' ? (
+                            overview ? (
+                                library_page()
+                            ) : layout === 'list' ? (
                                 track_list(listed)
                             ) : layout === 'compact' ? (
                                 track_rows(listed)
@@ -3224,7 +3849,14 @@ export default function App() {
                                         : `No mp3 files found in ${music_folder}`}
                             </p>
                         )}
+
+                        {/* the shelves above are what is already here; this is
+                            what they point at. no seeds means nothing has been
+                            marked yet, and a shelf that can only be empty is not
+                            worth the room. */}
+                        {has_more && suggestions()}
                     </div>
+
                     </>
                     )}
                 </main>
@@ -3437,6 +4069,21 @@ export default function App() {
                             <button className='danger' onClick={() => remove_song(menu.song)}>
                                 <Icon d={ICONS.trash} size={15} />
                                 Delete from disk
+                            </button>
+                        </>
+                    )}
+
+                    {menu.kind === 'suggestion' && (
+                        <>
+                            <div className='context-head'>
+                                <div className='name ellipsis'>{menu.track.title}</div>
+                                <div className='ellipsis'>
+                                    {menu.track.artist || 'Unknown artist'}
+                                </div>
+                            </div>
+                            <button onClick={() => download_suggestion(menu.track)}>
+                                <Icon d={ICONS.download} size={15} />
+                                Download
                             </button>
                         </>
                     )}
