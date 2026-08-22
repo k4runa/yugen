@@ -52,6 +52,8 @@
 
     --gutter: 0.5rem;
     --search-h: 2.75rem;
+    /* the two round buttons of the top row, held to one size by one value */
+    --top-btn: 2.5rem;
     --radius: 1.375rem;
 
     /* Apple's sheet curve, and an overshoot for things that pop into place */
@@ -558,6 +560,7 @@ button {
 /* ---------- main ---------- */
 
 .main {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -577,11 +580,51 @@ button {
     overscroll-behavior: contain;
 }
 
-/* nothing else lives up here, so the search is simply centred */
+/* the search is centred within what's left after the avatar's corner, so it
+   never grows underneath it at narrow widths */
+/* home sits against the bar; the avatar keeps the panel's right corner, and
+   the padding is the room held for it so the pair stays centred without it */
 .topbar {
     display: flex;
+    align-items: center;
     justify-content: center;
+    gap: 0.75rem;
+    padding-right: 3.25rem;
     margin-bottom: 1.5rem;
+}
+
+/* the profile page hides the avatar, so there is nothing to keep clear of */
+.topbar.solo {
+    padding-right: 0;
+}
+
+.topbar-btn {
+    display: grid;
+    place-items: center;
+    width: var(--top-btn);
+    height: var(--top-btn);
+    flex: none;
+    border: 1px solid var(--hairline);
+    border-radius: 50%;
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        var(--shadow);
+    color: var(--text);
+    cursor: pointer;
+    transition:
+        background var(--fast) ease,
+        transform var(--fast) var(--spring);
+}
+
+.topbar-btn:hover {
+    background: var(--hover);
+}
+
+.topbar-btn:active {
+    transform: scale(0.94);
 }
 
 .search-slot {
@@ -2417,6 +2460,280 @@ button {
         opacity: 0;
         transform: translate(-50%, 0) translateY(-0.25rem) scale(0.92);
     }
+}
+
+/* ---------- profile ---------- */
+
+.avatar {
+    display: block;
+    object-fit: cover;
+    flex: none;
+}
+
+/* the same size as the home button at the other end of the row */
+.avatar-sm {
+    width: var(--top-btn);
+    height: var(--top-btn);
+    border-radius: 50%;
+}
+
+.avatar-md {
+    width: 7.5rem;
+    height: 7.5rem;
+    border-radius: 50%;
+    box-shadow:
+        0 0 0 0.1875rem hsl(0 0% 100% / 0.12),
+        0 0.75rem 1.75rem -0.75rem var(--accent-glow),
+        0 0.375rem 1rem -0.5rem hsl(0 0% 0% / 0.4);
+}
+
+.avatar-lg {
+    width: 12.5rem;
+    height: 12.5rem;
+    border-radius: 50%;
+    /* fills the same 12.5rem column hero-cover does, lit the same way */
+    box-shadow:
+        0 0 0 0.25rem hsl(0 0% 100% / 0.12),
+        0 1.5rem 3rem -1rem var(--accent-glow),
+        0 0.5rem 1.5rem -0.5rem hsl(0 0% 0% / 0.4);
+}
+
+.avatar.placeholder {
+    display: grid;
+    place-items: center;
+    background: var(--skeleton);
+    color: var(--text-dim);
+}
+
+/* the panel's right corner, centred on the search row beside it: (1.25rem of
+   panel padding + half the row) less half the avatar */
+.profile-avatar-btn {
+    position: absolute;
+    top: calc(1.25rem + (var(--search-h) - var(--top-btn)) / 2);
+    right: 1.5rem;
+    z-index: 26;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    cursor: pointer;
+    transition: transform var(--fast) var(--spring);
+}
+
+.profile-avatar-btn:hover {
+    transform: scale(1.05);
+}
+
+.profile-avatar-btn:active {
+    transform: scale(0.96);
+}
+
+/* align-self matters: as a plain flex child this box would stretch to the
+   height of the fields beside it while the picture inside stayed square, and
+   the scrim below - which fills the box, not the picture - would paint an
+   ellipse hanging off the bottom of the circle */
+.avatar-edit {
+    position: relative;
+    flex: none;
+    align-self: flex-start;
+    border-radius: 50%;
+}
+
+/* purely decorative - the dim scrim and the upload icon. the real input sits
+   above it and takes the actual click, so this never needs pointer events */
+.avatar-upload {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    border-radius: 50%;
+    background: hsl(0 0% 0% / 0.55);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 550;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--fast) ease;
+}
+
+.avatar-edit:hover .avatar-upload,
+.avatar-edit:focus-within .avatar-upload {
+    opacity: 1;
+}
+
+/* transparent and on top, so the click that opens the native file dialog
+   lands on the input itself rather than being proxied through a button -
+   some webviews refuse to honour a programmatic .click() on a hidden one */
+.avatar-upload-input {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.avatar-upload-input:disabled {
+    cursor: default;
+}
+
+/* over one of the hero's two buttons rather than over the whole circle */
+.avatar-upload-input.pill {
+    border-radius: 999px;
+}
+
+/* the same scrim as the dialog's, but holding the two things the picture can
+   do on the profile page itself */
+.avatar-actions {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4375rem;
+    border-radius: 50%;
+    background: hsl(0 0% 0% / 0.58);
+    opacity: 0;
+    transition: opacity var(--fast) ease;
+}
+
+.avatar-edit:hover .avatar-actions,
+.avatar-edit:focus-within .avatar-actions {
+    opacity: 1;
+}
+
+.avatar-action {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    border: 1px solid hsl(0 0% 100% / 0.18);
+    border-radius: 999px;
+    background: hsl(0 0% 0% / 0.3);
+    color: #fff;
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--fast) ease;
+}
+
+.avatar-action:hover {
+    background: hsl(0 0% 100% / 0.18);
+}
+
+/* the picture is the tallest thing in the row, so the name, the bio and the
+   counts ride at its middle rather than stacking from its top edge */
+.profile-hero .now-body {
+    justify-content: center;
+}
+
+.profile-bio-text {
+    max-width: 30rem;
+    white-space: pre-wrap;
+}
+
+.profile-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+    margin-top: 1.25rem;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.profile-stats span {
+    display: flex;
+    gap: 0.3125rem;
+}
+
+.profile-stats span + span {
+    padding-left: 0.875rem;
+    border-left: 1px solid var(--hairline);
+}
+
+.profile-stats b {
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* the pill wants its own width here, not the sidebar's full-width block */
+.view-head .pill-btn.edit-profile {
+    width: auto;
+    flex: none;
+    margin-left: auto;
+    padding: 0.4375rem 0.875rem;
+}
+
+/* everything that touches the profile - the picture, the name, the bio -
+   lives in this one dialog rather than three separate inline edits, so there
+   is exactly one place that ever looks "in edit mode" */
+.profile-dialog {
+    width: min(27rem, 90vw);
+}
+
+.dialog-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.dialog-head h3 {
+    margin: 0;
+}
+
+.profile-dialog-body {
+    display: flex;
+    gap: 1.125rem;
+}
+
+.profile-dialog-fields {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.bio-input {
+    width: 100%;
+    min-height: 4rem;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 0.875rem;
+    background: var(--glass-inset);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.8438rem;
+    line-height: 1.5;
+    outline: none;
+    resize: vertical;
+    transition:
+        border-color var(--fast) ease,
+        box-shadow var(--fast) ease;
+}
+
+.bio-input:focus {
+    border-color: var(--accent-glow);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.dialog-hint {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.6875rem;
+    line-height: 1.4;
 }
 
 /* ---------- motion, opted out ---------- */

@@ -332,6 +332,22 @@ type Bridge = {
         shuffle: boolean,
     ): Promise<void>
     mpris_seeked(position: number): Promise<void>
+    get_username(): Promise<string>
+    get_profile_picture(): Promise<string>
+    get_biography(): Promise<string>
+    set_username(username: string): Promise<boolean>
+    set_profile_picture(img: string): Promise<boolean>
+    set_biography(bio: string): Promise<boolean>
+    get_favorite_songs(): Promise<FavoriteTrack[]>
+    add_favorite_song(track: FavoriteTrack): Promise<boolean>
+    remove_from_favorites(file_path: string): Promise<boolean>
+}
+
+type FavoriteTrack = {
+    title: string
+    artist: string
+    album: string
+    file_path: string
 }
 
 declare global {
@@ -673,6 +689,21 @@ function Cover({ data, alt, className }: { data?: string; alt: string; className
     )
 }
 
+// stored and handed back as a full data: url rather than raw base64 like the
+// covers - the mime type varies (png or jpeg), so the prefix travels with it
+// instead of being guessed on the way back out. a blank one falls back to a
+// plain silhouette instead
+function Avatar({ data, size, alt }: { data?: string; size: 'sm' | 'md' | 'lg'; alt: string }) {
+    const icon_size = size === 'lg' ? 40 : size === 'md' ? 26 : 18
+    return data ? (
+        <img className={`avatar avatar-${size}`} src={data} alt={alt} />
+    ) : (
+        <div className={`avatar avatar-${size} placeholder`}>
+            <Icon d={ICONS.user} size={icon_size} />
+        </div>
+    )
+}
+
 type HeartProps = {
     liked: boolean
     on_toggle: () => void
@@ -705,6 +736,7 @@ const ICONS = {
     album: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2',
     artist: 'M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8M5 20a7 7 0 0 1 14 0',
     back: 'M15 5l-7 7 7 7',
+    home: 'M3.5 11.5 12 4.5l8.5 7M6 10.2V20h12V10.2M10 20v-5h4v5',
     search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14M20 20l-4-4',
     sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10M12 2v2m0 16v2M4.2 4.2l1.4 1.4m12.8 12.8 1.4 1.4M2 12h2m16 0h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
     moon: 'M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5',
@@ -731,6 +763,9 @@ const ICONS = {
     aura: 'M9.5 14.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11M14.5 20.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11',
     discord:
         'M9 7.5C11 7 13 7 15 7.5L16.4 5.6 18.6 6.6C21.4 9.4 21.9 14 20.3 17.6L18.2 20 16.6 17.8C13.6 18.9 10.4 18.9 7.4 17.8L5.8 20 3.7 17.6C2.1 14 2.6 9.4 5.4 6.6L7.6 5.6ZM9.8 13.3a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6M14.2 13.3a1.3 1.3 0 1 0 0-2.6 1.3 1.3 0 0 0 0 2.6',
+    user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4.5 20a7.5 7.5 0 0 1 15 0',
+    star: 'M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z',
+    upload: 'M12 15V4m0 0L8 8m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3',
 }
 
 // the shelf is the sidebar's own list. it holds the playlists, and whatever else
@@ -754,6 +789,18 @@ export default function App() {
     const [share_dc, set_share_dc] = useState(() => stored_flag('share_dc', true))
     const [view, set_view] = useState<View>(saved_playback?.view ?? 'library')
     const [selection, set_selection] = useState<string | null>(saved_playback?.selection ?? null)
+
+    // the profile popup and the page it opens into - kept apart from `view`,
+    // which is the library's own switch and already carries a lot of meaning
+    const [username, set_username] = useState('')
+    const [profile_pic, set_profile_pic] = useState('')
+    const [biography, set_biography] = useState('')
+    const [favorites, set_favorites] = useState<FavoriteTrack[]>([])
+    const [profile_open, set_profile_open] = useState(false)
+    const [profile_edit_open, set_profile_edit_open] = useState(false)
+    const [username_draft, set_username_draft] = useState('')
+    const [bio_draft, set_bio_draft] = useState('')
+    const [avatar_busy, set_avatar_busy] = useState(false)
 
     const [volume, set_volume_state] = useState(1)
     // what unmuting goes back to, so the level survives a trip through zero
@@ -915,6 +962,12 @@ export default function App() {
         }
     }, [aura_menu])
 
+    // the favourites list is only worth fetching once the page that shows it
+    // is actually open
+    useEffect(() => {
+        if (profile_open) load_favorites()
+    }, [profile_open])
+
     useEffect(() => {
         // with no attribute the stylesheet falls back to prefers-color-scheme
         if (theme === 'system') delete document.documentElement.dataset.theme
@@ -1053,6 +1106,8 @@ export default function App() {
         void (async () => {
             const [library, lists] = await Promise.all([fetch_songs(), sync_playlists()])
             sync_liked()
+            sync_profile()
+            load_favorites()
 
             // the listing that was open last time may not have survived: a
             // playlist that was deleted, an album whose files left the folder
@@ -1200,6 +1255,63 @@ export default function App() {
             set_liked(new Set(await bridge().get_liked_songs()))
         } catch {
             // keep showing whatever we have rather than dropping the list
+        }
+    }
+
+    // profile.json backs all three, so one round trip covers the popup and the
+    // page it opens into. each field fails on its own: a backend that only
+    // exposes some of the profile bridge should still show what it has
+    async function sync_profile() {
+        const [name, pic, bio] = await Promise.all([
+            bridge().get_username().catch(() => ''),
+            bridge().get_profile_picture().catch(() => ''),
+            bridge().get_biography().catch(() => ''),
+        ])
+
+        set_username(name)
+        set_profile_pic(pic)
+        set_biography(bio)
+    }
+
+    async function load_favorites() {
+        try {
+            set_favorites(await bridge().get_favorite_songs())
+        } catch {
+            set_favorites([])
+        }
+    }
+
+    const is_favorite = (name: string) => favorites.some((track) => track.file_path === name)
+
+    async function toggle_favorite(name: string) {
+        const was_favorite = is_favorite(name)
+
+        // flip right away so the click always gives feedback, then reconcile
+        set_favorites((prev) =>
+            was_favorite
+                ? prev.filter((track) => track.file_path !== name)
+                : [
+                      ...prev,
+                      {
+                          title: title_of(name),
+                          artist: artist_of(name),
+                          album: album_of(name),
+                          file_path: name,
+                      },
+                  ],
+        )
+
+        try {
+            if (was_favorite) await bridge().remove_from_favorites(name)
+            else
+                await bridge().add_favorite_song({
+                    title: title_of(name),
+                    artist: artist_of(name),
+                    album: album_of(name),
+                    file_path: name,
+                })
+        } finally {
+            await load_favorites()
         }
     }
 
@@ -1532,11 +1644,13 @@ export default function App() {
     }
 
     function open_playlist(name: string) {
+        set_profile_open(false)
         set_view('playlist')
         set_selection(name)
     }
 
     function open_view(next: View) {
+        set_profile_open(false)
         set_view(next)
         set_selection(null)
     }
@@ -1914,6 +2028,67 @@ export default function App() {
         await rename_playlist(dialog.playlist, draft)
     }
 
+    // avatar, name and bio all live behind one "edit profile" dialog rather
+    // than three separate inline affordances - the drafts are seeded fresh
+    // every time it opens, so closing without saving never leaks a stale edit
+    function open_profile_edit() {
+        set_username_draft(username)
+        set_bio_draft(biography)
+        set_profile_edit_open(true)
+    }
+
+    async function commit_profile_edit() {
+        const name = username_draft.trim()
+        const bio = bio_draft.trim()
+        set_profile_edit_open(false)
+
+        if (name && name !== username) {
+            set_username(name)
+            try {
+                await bridge().set_username(name)
+            } catch {
+                // the field already shows the new value; a failed write just
+                // means it will not survive a restart
+            }
+        }
+
+        if (bio !== biography) {
+            set_biography(bio)
+            try {
+                await bridge().set_biography(bio)
+            } catch {
+                // ditto
+            }
+        }
+    }
+
+    // read straight into a data url: the webview's file input has no real
+    // filesystem path to hand over (that is an old Electron-only extension,
+    // not something WebKitGTK provides), so the bytes travel as base64 instead
+    function read_as_data_url(file: File): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.onerror = () => reject(reader.error)
+            reader.readAsDataURL(file)
+        })
+    }
+
+    async function pick_avatar(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.currentTarget.files?.[0]
+        e.currentTarget.value = ''
+        if (!file) return
+
+        set_avatar_busy(true)
+        try {
+            const data_url = await read_as_data_url(file)
+            const ok = await bridge().set_profile_picture(data_url)
+            if (ok) set_profile_pic(await bridge().get_profile_picture())
+        } finally {
+            set_avatar_busy(false)
+        }
+    }
+
     // local wrappers so call sites stay short
     const cover = (name: string, className: string) => (
         <Cover data={cover_of(name)} alt={title_of(name)} className={className} />
@@ -2142,6 +2317,7 @@ export default function App() {
         if (row.kind === 'playlists') return open_playlist(row.name)
 
         // albums and artists are grouped views with one group picked out
+        set_profile_open(false)
         set_view(row.kind)
         set_selection(row.name)
     }
@@ -2469,7 +2645,31 @@ export default function App() {
                 </aside>
 
                 <main className='main'>
-                    <div className='topbar'>
+                    {/* it stands down on the profile page: you are already there */}
+                    {!profile_open && (
+                        <button
+                            className='profile-avatar-btn'
+                            {...tip(username ? `Hello, ${username}` : 'Profile')}
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                set_profile_open(true)
+                            }}
+                        >
+                            <Avatar data={profile_pic} size='sm' alt={username || 'Profile'} />
+                        </button>
+                    )}
+
+                    {/* one row across the top of every page, the profile
+                        included: the way home, then the way to find something */}
+                    <div className={`topbar${profile_open ? ' solo' : ''}`}>
+                        <button
+                            className='topbar-btn'
+                            {...tip('Library')}
+                            onClick={() => open_view('library')}
+                        >
+                            <Icon d={ICONS.home} size={19} />
+                        </button>
+
                         <div className='search-slot'>
                             <label
                                 className={`search${search_open ? ' open' : ''}`}
@@ -2568,6 +2768,121 @@ export default function App() {
 
                     </div>
 
+                    {profile_open ? (
+                        <>
+                        <div className='view-head'>
+                            <button
+                                className='icon-btn back'
+                                {...tip('Back')}
+                                onClick={() => set_profile_open(false)}
+                            >
+                                <Icon d={ICONS.back} size={17} />
+                            </button>
+                            <h2 className='section-title'>Profile</h2>
+                            <button className='pill-btn edit-profile' onClick={open_profile_edit}>
+                                <Icon d={ICONS.rename} size={15} />
+                                Edit profile
+                            </button>
+                        </div>
+
+                        <section className='now-section profile-hero'>
+                            {/* the picture carries both jobs on hover: the whole
+                                profile through the dialog, or just a new photo
+                                straight from the picker */}
+                            <div className='avatar-edit'>
+                                <Avatar
+                                    data={profile_pic}
+                                    size='lg'
+                                    alt={username || 'Profile'}
+                                />
+                                <div className='avatar-actions'>
+                                    <button
+                                        className='avatar-action'
+                                        onClick={open_profile_edit}
+                                    >
+                                        <Icon d={ICONS.rename} size={14} />
+                                        Edit profile
+                                    </button>
+
+                                    <span className='avatar-action'>
+                                        {avatar_busy ? (
+                                            <span className='spinner' />
+                                        ) : (
+                                            <Icon d={ICONS.upload} size={14} />
+                                        )}
+                                        Change photo
+                                        {/* the picker has to be the element the
+                                            click lands on, so it lies over its own
+                                            button rather than the whole circle */}
+                                        <input
+                                            className='avatar-upload-input pill'
+                                            type='file'
+                                            accept='image/png,image/jpeg'
+                                            disabled={avatar_busy}
+                                            aria-label='Change profile picture'
+                                            onChange={pick_avatar}
+                                        />
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div className='now-body'>
+                                <h1 className='ellipsis'>{username || 'Unnamed'}</h1>
+                                <p
+                                    className={`sub profile-bio-text${biography ? '' : ' muted'}`}
+                                >
+                                    {biography || 'No bio yet.'}
+                                </p>
+
+                                {/* the three lists this profile actually owns, counted
+                                    off the library itself rather than kept anywhere */}
+                                <div className='profile-stats'>
+                                    <span>
+                                        <b>{favorites.length}</b> favorites
+                                    </span>
+                                    <span>
+                                        <b>{liked_songs.length}</b> liked
+                                    </span>
+                                    <span>
+                                        <b>{playlist_names.length}</b> playlists
+                                    </span>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div className='main-scroll'>
+                            <div className='view-head'>
+                                <h2 className='section-title'>Favorite Songs</h2>
+                                <span className='muted'>{favorites.length} tracks</span>
+                            </div>
+
+                            {favorites.length ? (
+                                <div className='card-row'>
+                                    {favorites.map((track) => (
+                                        <button
+                                            key={track.file_path}
+                                            className='album'
+                                            onClick={() => play_music(track.file_path)}
+                                        >
+                                            {cover(track.file_path, 'album-cover')}
+                                            <div className='title ellipsis'>
+                                                {track.title || track.file_path}
+                                            </div>
+                                            <div className='muted ellipsis'>
+                                                {track.artist || 'Unknown artist'}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className='empty'>
+                                    No favorite songs yet. Right-click a track to add one.
+                                </p>
+                            )}
+                        </div>
+                        </>
+                    ) : (
+                    <>
                     {current && (
                         <section className='now-section'>
                             {cover(current, 'hero-cover')}
@@ -2716,6 +3031,8 @@ export default function App() {
                             </p>
                         )}
                     </div>
+                    </>
+                    )}
                 </main>
 
                 <aside className={`rightbar${rail_open ? '' : ' collapsed'}`} inert={!rail_open}>
@@ -2845,6 +3162,10 @@ export default function App() {
                             <button onClick={() => toggle_like(menu.song)}>
                                 <Icon d={ICONS.heart} size={15} fill={liked.has(menu.song)} />
                                 {liked.has(menu.song) ? 'Remove from liked' : 'Add to liked'}
+                            </button>
+                            <button onClick={() => toggle_favorite(menu.song)}>
+                                <Icon d={ICONS.star} size={15} fill={is_favorite(menu.song)} />
+                                {is_favorite(menu.song) ? 'Remove from favorites' : 'Add to favorites'}
                             </button>
 
                             {view === 'playlist' && selection && (
@@ -3065,6 +3386,117 @@ export default function App() {
                                 className='pill-btn primary'
                                 onClick={commit_dialog}
                                 disabled={!draft.trim()}
+                            >
+                                Save
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {profile_edit_open && (
+                <div className='overlay' onClick={() => set_profile_edit_open(false)}>
+                    <div
+                        className='dialog profile-dialog'
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className='dialog-head'>
+                            <h3>Edit profile</h3>
+                            <button
+                                className='icon-btn tiny'
+                                {...tip('Close')}
+                                onClick={() => set_profile_edit_open(false)}
+                            >
+                                <Icon d={ICONS.close} size={15} />
+                            </button>
+                        </div>
+
+                        <div className='profile-dialog-body'>
+                            <div className='avatar-edit'>
+                                <Avatar
+                                    data={profile_pic}
+                                    size='md'
+                                    alt={username || 'Profile'}
+                                />
+                                {/* it says what it does, so it needs no tooltip -
+                                    one over a dialog this small lands on the title */}
+                                <div className='avatar-upload' aria-hidden='true'>
+                                    {avatar_busy ? (
+                                        <span className='spinner' />
+                                    ) : (
+                                        <>
+                                            <Icon d={ICONS.upload} size={18} />
+                                            Change
+                                        </>
+                                    )}
+                                </div>
+                                {/*
+                                    the file picker has to be the element the click
+                                    actually lands on - some webviews silently refuse to
+                                    open the native dialog for a programmatic .click()
+                                    proxied through a button, so this sits transparent on
+                                    top of the artwork instead
+                                */}
+                                <input
+                                    className='avatar-upload-input'
+                                    type='file'
+                                    accept='image/png,image/jpeg'
+                                    disabled={avatar_busy}
+                                    aria-label='Change profile picture'
+                                    onChange={pick_avatar}
+                                />
+                            </div>
+
+                            <div className='profile-dialog-fields'>
+                                <label className='field'>
+                                    Name
+                                    <input
+                                        autoFocus
+                                        placeholder='Your name'
+                                        value={username_draft}
+                                        onChange={(e) =>
+                                            set_username_draft(e.currentTarget.value)
+                                        }
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') commit_profile_edit()
+                                            if (e.key === 'Escape')
+                                                set_profile_edit_open(false)
+                                        }}
+                                    />
+                                </label>
+                                <label className='field'>
+                                    Bio
+                                    <textarea
+                                        className='bio-input'
+                                        placeholder='Add a bio'
+                                        value={bio_draft}
+                                        onChange={(e) =>
+                                            set_bio_draft(e.currentTarget.value)
+                                        }
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Escape')
+                                                set_profile_edit_open(false)
+                                        }}
+                                    />
+                                </label>
+                            </div>
+                        </div>
+
+                        <p className='dialog-hint'>
+                            Kept on this device only, next to your library.
+                        </p>
+
+                        <div className='dialog-actions'>
+                            <button
+                                className='pill-btn'
+                                onClick={() => set_profile_edit_open(false)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className='pill-btn primary'
+                                onClick={commit_profile_edit}
+                                disabled={!username_draft.trim()}
                             >
                                 Save
                             </button>

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -47,9 +48,10 @@ namespace yugen
 {
      namespace
      {
-          constexpr const char* PLAYLISTS_FILE = "/playlists.json";
+          constexpr const char* PLAYLISTS_FILE   = "/playlists.json";
+          constexpr const char* PROFILE_FILE     = "/profile.json";
           constexpr const char* LIKED_SONGS_FILE = "/liked_songs.json";
-          constexpr const char* COVERS_FILE = "/covers.json";
+          constexpr const char* COVERS_FILE      = "/covers.json";
 
           constexpr const int MIN_COUNT = 50;
 
@@ -1028,5 +1030,149 @@ namespace yugen
      bool get_activity()
      {
           return share_activity_on_dc;
+     }
+
+     std::vector<TrackInfo> Profile::get_favorite_songs()
+     {
+          const json data = load_profile();
+
+          if(data.empty() || !data.contains("favorite_songs") || 
+               data["favorite_songs"].empty()) return {};
+
+          std::vector<TrackInfo> songs {};
+          for(const auto& s : data["favorite_songs"])
+          {
+               TrackInfo t;
+               t.title = s.value("title", "");
+               t.artist = s.value("artist", "");
+               t.album = s.value("album","");
+               t.file_path = s.value("file_path","");
+
+               songs.push_back(t);
+          }
+
+          return songs;
+     }
+
+     bool Profile::add_favorite_song(const TrackInfo& track)
+     {
+          json data = load_profile();
+          auto& arr = data["favorite_songs"];
+          bool found = false;
+          for(auto it = arr.begin(); it != arr.end(); ++it)
+          {
+               if((*it).value("file_path","") == track.file_path) {
+                    found = true;
+                    break;
+               }
+          }
+
+          if(!found)
+          {
+               json song;
+               song["title"] = track.title;
+               song["artist"] = track.artist;
+               song["album"] = track.album;
+               song["file_path"] = track.file_path;
+
+               data["favorite_songs"].push_back(song);
+          }
+
+          return save_data(data);
+     }
+
+     std::string Profile::get_profile_picture()
+     {
+          const json data = load_profile();
+          if(data.empty()) return "";
+
+          return data.contains("profile_pic_path") ? data["profile_pic_path"] : "";
+     }
+
+     std::string Profile::get_username()
+     {
+          const json data = load_profile();
+          if(data.empty()) return "";
+
+          return data.contains("username") ? data["username"] : "";
+     }
+
+     std::string Profile::get_biography()
+     {
+          const json data = load_profile();
+          if(data.empty()) return "";
+
+          return data.contains("biography") ? data["biography"] : "";
+     }
+
+     bool Profile::save_data(const json& data)
+     {
+          const std::string path = data_dir() + PROFILE_FILE;
+
+          std::ofstream out(path);
+
+          if(!out.is_open()) return false;
+
+          try 
+          {
+               out << data.dump(4);
+               return true;
+          } 
+          catch (std::exception& e) 
+          {
+               return false;
+          }
+     }
+
+     json Profile::load_profile()
+     {
+          const std::string path = data_dir() + PROFILE_FILE;
+          if(!fs::exists(path)) return json::object();
+
+          std::ifstream f(path);
+          if(!f.is_open()) return json::object();
+
+          try {
+               return json::parse(f);
+          } catch (json::exception& e) {
+               return json::object();
+          }
+     }
+
+     bool Profile::set_profile_picture(const std::string& base64_data)
+     {
+          json data = load_profile();
+          data["profile_pic_path"] = base64_data;
+          return save_data(data);
+     }
+
+     bool Profile::set_username(const std::string& username)
+     {
+          json data = load_profile();
+          data["username"] = username;
+          return save_data(data);
+     }
+
+     bool Profile::set_biography(const std::string& bio)
+     {
+          json data = load_profile();
+          data["biography"] = bio;
+          return save_data(data);
+     }
+
+     bool Profile::remove_from_favorites(const std::string& file_path)
+     {
+          json data = load_profile();
+          if(data.empty() || !data.contains("favorite_songs")) return false;
+
+          auto& arr = data["favorite_songs"];
+          for(auto it = arr.begin(); it != arr.end(); ++it)
+          {
+               if((*it).value("file_path","") == file_path) {
+                    arr.erase(it);
+                    break;
+               }
+          }
+          return save_data(data);
      }
 }

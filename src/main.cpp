@@ -35,6 +35,7 @@ namespace fs = std::filesystem;
 using mm = yugen::MusicManager;
 using sm = yugen::SoundManager;
 using co = yugen::Core;
+using pf = yugen::Profile;
 
 namespace
 {
@@ -44,8 +45,8 @@ namespace
      // the embedded files are keyed by exactly that path
      constexpr const char* UI_ENTRY = "/index.html";
 
-     constexpr int WINDOW_MIN_WIDTH = 720;
-     constexpr int WINDOW_MIN_HEIGHT = 440;
+     constexpr int WINDOW_MIN_WIDTH = 900;
+     constexpr int WINDOW_MIN_HEIGHT = 720;
 
      /*
       * expose_async
@@ -358,6 +359,41 @@ coco::stray start(saucer::application* app)
           return co::get_lyrics(title, artist);
      });
 
+     expose_async(webview, "get_username", [](){
+          return pf::get_username();
+     });
+
+     expose_async(webview, "get_biography", [](){
+          return pf::get_biography();
+     });
+     
+     expose_async(webview, "get_profile_picture", [](){
+          return pf::get_profile_picture();
+     });
+     
+     expose_async(webview, "get_favorite_songs", [](){
+          return pf::get_favorite_songs();
+     });
+
+     expose_async(webview, "set_username", [](std::string username){
+          return pf::set_username(username);
+     });
+     
+     expose_async(webview, "set_biography", [](std::string bio){
+          return pf::set_biography(bio);
+     });
+
+     expose_async(webview, "set_profile_picture", [](std::string img_path){
+          return pf::set_profile_picture(img_path);
+     });
+     
+     expose_async(webview, "add_favorite_song", [](yugen::TrackInfo track){
+          return pf::add_favorite_song(track);
+     });
+     
+     expose_async(webview, "remove_from_favorites", [](std::string file_path){
+          return pf::remove_from_favorites(file_path);
+     });
      /*
       * Discord. Both of these only touch a flag: the presence thread is started
       * at launch and keeps running either way, it just stops being told about

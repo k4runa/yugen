@@ -175,4 +175,32 @@ namespace yugen
                static bool save_playlists(const json& data);
                static json load_playlists();
      };
+
+     class Profile
+     {
+          public:
+               static std::vector<TrackInfo> get_favorite_songs();
+               static std::string get_profile_picture();
+               static std::string get_biography();
+               static std::string get_username();
+
+               static bool set_profile_picture(const std::string& img_path);
+               static bool set_username(const std::string& username);
+               static bool set_biography(const std::string& bio);
+               
+               static bool add_favorite_song(const TrackInfo& track);
+               static bool remove_from_favorites(const std::string& file_path);
+
+          private:
+               static bool save_data(const json& data);
+               static json load_profile();
+     };
+
+     class Settings 
+     {
+          public:
+               // Nothing here
+          private:
+               // Also nothing here, for now..
+     };
 }
