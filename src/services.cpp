@@ -65,6 +65,10 @@ namespace yugen
           // set from the ui through set_activity(), read whenever a status is
           // about to go up - atomic because those are two different threads
           std::atomic<bool> share_activity_on_dc = true;
+          // follows the transport rather than the ui: playback being paused takes
+          // the status down without touching what the user asked for, so resuming
+          // puts it back up instead of coming back to a switch that turned itself off
+          std::atomic<bool> share_activity_paused = false;
 
           // file name -> cover url, mirrored to covers.json. a miss is stored as
           // an empty string, so a track without artwork is looked up once and
@@ -363,6 +367,7 @@ namespace yugen
      {
           if(sound_initialized)
           {
+               share_activity_paused = false;
                ma_sound_stop(&sound);
                ma_sound_uninit(&sound);
 
@@ -410,14 +415,49 @@ namespace yugen
           publish_activity(track);
      }
 
-     void SoundManager::resume()
+     // Puts the remembered track up again without changing what is being shared.
+     // set_activity() does the same copy, but it writes the sharing flag on the
+     // way through, so it cannot stand in for this - the transport has to be able
+     // to take the status down and bring it back while the ui switch stays put.
+     //
+     // The copy is taken under the lock and published outside it, since
+     // publish_activity() takes discord_mtx itself.
+     void republish_activity() 
      {
-          if(sound_initialized) ma_sound_start(&sound);
+          TrackInfo track;
+          {
+               std::lock_guard<std::mutex> lk(discord_mtx);
+               track = discord_track;
+          }
+
+          publish_activity(track);
      }
 
+     // Pausing and resuming both republish: discord only knows what it was last
+     // told, so a status left standing keeps counting up its progress bar as if
+     // the track were still running.
+     void SoundManager::resume()
+     {
+          if(sound_initialized) {
+               share_activity_paused = false;
+               ma_sound_start(&sound);
+
+               // the timestamps are rebuilt from the current position, so the bar
+               // picks up where it stopped rather than where the track began
+               republish_activity();
+          }
+     }
+
+     // The flag is set whether or not sharing is on, so that switching it on
+     // while paused does not put up a track that is not playing.
      void SoundManager::stop()
      {
-          if(sound_initialized) ma_sound_stop(&sound);
+          if(sound_initialized) {
+               share_activity_paused = true;
+               ma_sound_stop(&sound);
+
+               republish_activity();
+          }
      }
 
      // miniaudio counts in pcm frames, the ui thinks in seconds, so the position
@@ -922,7 +962,7 @@ namespace yugen
 
           auto& rpc = discord::RPCManager::get();
 
-          if(!share_activity_on_dc || track.title.empty())
+          if(share_activity_paused || !share_activity_on_dc || track.title.empty())
           {
                rpc.clearPresence();
                return;

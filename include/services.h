@@ -46,6 +46,9 @@ namespace yugen
      // hands the playing track to discord, or takes the status down when sharing
      // is off; called on every track change
      void publish_activity(const TrackInfo& track);
+     // puts the track that is already up there again, leaving the sharing flag
+     // alone; how pausing takes the status down and resuming brings it back
+     void republish_activity();
 
      // whether the track is shared as a discord activity. changing it applies
      // right away: turning it off takes the status down, turning it on puts the
