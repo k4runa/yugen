@@ -171,6 +171,17 @@ namespace yugen
                // queue
                static std::vector<std::string> shuffle_songs(const std::vector<std::string>& songs);
 
+               // recommendations. both go out to last.fm and both need
+               // LASTFM_API_KEY in the environment; without one they say so and
+               // answer empty.
+
+               // json text rather than a structure - the ui parses it - and the
+               // file is read for its tags, so it has to still be on disk
+               static std::string get_similar(const std::string& file_path, const int limit);
+               // the second look for a picture, for the suggestions get_similar
+               // had none for - which is most of them
+               static std::string get_track_cover(const std::string& artist, const std::string& track_name);
+          
           private:
                static bool save_playlists(const json& data);
                static json load_playlists();

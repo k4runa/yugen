@@ -49,6 +49,10 @@ namespace yugen
      namespace
      {
           constexpr const char* PLAYLISTS_FILE   = "/playlists.json";
+          // the one grey star last.fm answers with for everything it has no
+          // picture of, recognised by the hash in its url so that a suggestion
+          // carrying nothing is handed over as carrying nothing
+          constexpr const char* PLACEHOLDER      = "2a96cbd8b46e442fc41c2b86b821562f";
           constexpr const char* PROFILE_FILE     = "/profile.json";
           constexpr const char* LIKED_SONGS_FILE = "/liked_songs.json";
           constexpr const char* COVERS_FILE      = "/covers.json";
@@ -58,6 +62,12 @@ namespace yugen
           // what is shown when no cover is known: an asset uploaded to the
           // application on discord's developer portal, named by its key
           constexpr const char* DISCORD_LOGO_ASSET = "yugen";
+
+          // read out of the environment once, at load, and never again: nothing
+          // sets it later, so a run started without it stays without it. the
+          // recommendation calls are the only ones that need it, and they say so
+          // and give up rather than asking last.fm without one.
+          const char* API_KEY =  getenv("LASTFM_API_KEY");
 
           // the last track handed to publish_activity(), kept so that turning
           // sharing back on can put it up again right away
@@ -1175,5 +1185,195 @@ namespace yugen
                }
           }
           return save_data(data);
+     }
+
+     /*
+      * The tracks last.fm puts next to one of ours, as json text - the ui reads
+      * it, since the json library in here is not the one saucer serialises with.
+      *
+      * It answers about one track at a time because that is the shape of the
+      * call behind it: the file is read for its tags first, so what goes out is
+      * a title and an artist rather than a path. Both are free text landing in a
+      * query string, so both go through curl's escaping. Anything missing - no
+      * key, no file, nothing back, nothing parseable - is an empty answer rather
+      * than an error, and the ui carries on around it.
+      */
+     std::string MusicManager::get_similar(const std::string& file_path, const int limit = 10)
+     {
+          if(file_path.empty()) return {};
+          if(!fs::exists(file_path)) return {};
+          
+          std::string url = "https://ws.audioscrobbler.com/2.0/?method=track.getsimilar";
+
+          if(!API_KEY) {
+               std::println("[WARNING] NO LASTFM API KEY FOUND.");
+               return "";
+          }
+
+          std::vector<std::string> metadata = SoundManager::get_metadata(file_path);
+          const std::string title = metadata.size() > 0 ? metadata[0] : "";
+          const std::string artist = metadata.size() > 1 ? metadata[1] : "";
+
+          CURL* curl = curl_easy_init();
+          if(!curl) return {};
+
+          if(!artist.empty()) 
+          {
+               char* enc = curl_easy_escape(curl, artist.c_str(), 0);
+               url += "&artist=" + std::string(enc);
+               curl_free(enc);
+          }
+
+          if(!title.empty())
+          {
+               char* enc = curl_easy_escape(curl, title.c_str(), 0);
+               url += "&track=" + std::string(enc);
+               curl_free(enc); 
+          }
+
+          url += "&api_key=" + std::string(API_KEY) 
+          + "&format=json&autocorrect=1" + "&limit=" + std::to_string(limit);
+
+          curl_easy_cleanup(curl);
+
+          const std::string response = Core::fetch_url(url);
+          if(response.empty()) return {};
+
+
+          // parsed without throwing: what comes back is whatever the far end
+          // felt like sending, including an error object with no tracks in it
+          const auto data = json::parse(response, nullptr, false);
+          if(data.is_discarded() || data.empty()) return {};
+          if(!data.contains("similartracks")) return {};
+          
+          json result = json::array();
+
+          const auto& similar = data["similartracks"];
+          if(!similar.contains("track") || !similar["track"].is_array()) return {};
+
+          const auto& tracks = similar["track"];
+
+          // each entry is rebuilt rather than passed along as it arrived: the ui
+          // wants four fields and last.fm sends a page of them
+          for(const auto& t : tracks)
+          {
+               std::string name = t.value("name","");
+               std::string art;
+
+               if(t.contains("artist")) art = t["artist"].value("name","");
+
+               // the sizes come as a list, and the largest is the one worth
+               // showing on a card
+               std::string img;
+               if(t.contains("image") && t["image"].is_array()) {
+                    for(const auto& i : t["image"]) {
+                         if(i.value("size", "") == "extralarge") {
+                              img = i.value("#text", "");
+                              break;
+                         }
+                    }
+               }
+
+               // the placeholder is not a picture, and the ui would rather go
+               // and look for a real one than hang a grey star on the shelf
+               if(img.find(PLACEHOLDER) != std::string::npos) {
+                    img = "";
+               }
+
+               // a track with no name is nothing the ui could show or search for
+               if(!name.empty()) 
+               {
+                    // closeness to the track we asked about, which is the
+                    // order the suggestions are read in. last.fm sends it as a
+                    // number in some answers and as text in others, so both are
+                    // taken - and one it cannot answer for sorts last rather
+                    // than costing the whole pass.
+                    double score = 0.0;
+
+                    if(t.contains("match")) 
+                    {
+                         const auto& m = t["match"];
+                         if(m.is_number()) {
+                              score = m.get<double>();
+                         } else if(m.is_string()) {
+                              score = std::strtod(m.get<std::string>().c_str(), nullptr);
+                         }
+                    }
+
+                    result.push_back({
+                         {"name", name},
+                         {"artist", art},
+                         {"image", img},
+                         {"match", score}
+                    });
+               }
+          }
+
+          return result.dump();
+     }
+
+     /*
+      * The picture for one track, as a url, asked for by name.
+      *
+      * get_similar hands back most of its suggestions with nothing to show -
+      * the similar list carries the placeholder far more often than it carries
+      * artwork - so this is the second look, and the ui spends it per card.
+      * What comes back is the album's cover rather than the track's, which is
+      * what last.fm keeps on a track page, and it is handed over as it arrived:
+      * the placeholder is filtered on the ui side, where a card that ends up
+      * with nothing is simply not shown.
+      */
+     std::string MusicManager::get_track_cover(const std::string& artist, const std::string& track_name)
+     {
+          if(!API_KEY) {
+               std::println("[WARNING] NO LASTFM API KEY FOUND.");
+               return "";
+          }
+
+          std::string url = "https://ws.audioscrobbler.com/2.0/?method=track.getInfo";
+          
+          CURL* curl = curl_easy_init();
+          if(!curl) return "";
+
+          if(!artist.empty()) {
+               char* enc = curl_easy_escape(curl, artist.c_str(), 0);
+               url += "&artist=" + std::string(enc);
+               curl_free(enc);
+          }
+
+          if(!track_name.empty()) {
+               char* enc = curl_easy_escape(curl, track_name.c_str(), 0);
+               url += "&track=" + std::string(enc);
+               curl_free(enc);
+          }
+
+          url += "&api_key=" + std::string(API_KEY) + "&format=json";
+
+          curl_easy_cleanup(curl);
+          
+          const std::string response = Core::fetch_url(url);
+
+          if(response.empty()) return "";
+
+          const auto data = json::parse(response, nullptr, false);
+          if(data.is_discarded() || data.empty()) return {};
+
+          // a track last.fm knows by name but has no release for has no
+          // picture either: every step down to the image list has to be there
+          if(!data.contains("track") || !data["track"].contains("album") 
+          || !data["track"]["album"].contains("image")) return "";
+
+          const auto& images = data["track"]["album"]["image"];
+          if(images.empty()) return "";
+
+          // the same list of sizes as above, and the same reason for the largest
+
+          for(const auto& i : images) {
+               if(i.value("size", "") == "extralarge") {
+                    return i.value("#text", "");
+               }
+          }
+
+          return "";
      }
 }

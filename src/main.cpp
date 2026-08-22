@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <pwd.h>
 #include <unistd.h>
 #define MINIAUDIO_IMPLEMENTATION
@@ -446,6 +447,15 @@ coco::stray start(saucer::application* app)
           return "";
      });
 
+     // both of these end in a request to last.fm, so they go out async: the ui
+     // fires a handful at a time and the window stays live through them
+     expose_async(webview, "get_similar", [](std::string file_path, int limit){
+          return mm::get_similar(file_path, limit);
+     });
+
+     expose_async(webview, "get_track_cover", [](std::string artist, std::string track_name){
+          return mm::get_track_cover(artist, track_name);
+     });
 
 
      /*
