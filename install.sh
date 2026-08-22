@@ -39,6 +39,11 @@ NODE_FROM_NVM=0
 PREFIX=${PREFIX:-/usr/local}
 
 INSTALL_DIR="$HOME/.local/bin"
+# where the player keeps everything it owns. It finds this out of the passwd
+# entry rather than $HOME, so the two only agree while this script is run by the
+# user who will be running yugen - the same assumption every path here makes.
+CONFIG_DIR="$HOME/.config/yugen"
+KEY_FILE="$CONFIG_DIR/lastfm_key"
 LIB_DIR="$HOME/.local/lib/yugen"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
@@ -609,6 +614,51 @@ build_from_source() {
     ok "Installed to $PREFIX/bin/yugen"
 }
 
+# ------------------------------------------------------------------ lastfm --
+
+# Suggestions on the library page come from last.fm, which wants an api key.
+#
+# The app reads $LASTFM_API_KEY first and falls back to this file, and the file
+# is what makes the key survive: an export only lives in the shell that ran it,
+# so a yugen started from the desktop launcher - or from any other terminal -
+# would come up without one. The AppImage has no other way in at all, since
+# there is no build to bake anything into.
+#
+# Asking is skipped rather than pressed: everything else in the player works
+# without a key, and only the "Suggested for you" shelf goes away.
+setup_lastfm_key() {
+    if [ -s "$KEY_FILE" ]; then
+        ok "last.fm key already set in $KEY_FILE"
+        return 0
+    fi
+
+    local key="${LASTFM_API_KEY:-}"
+
+    if [ -z "$key" ]; then
+        printf "\n"
+        info "yugen can suggest tracks to add, using last.fm. That needs an api key."
+        info "Leave this empty to skip - everything else works without one."
+        printf "    ${BOLD}https://www.last.fm/api/account/create${RESET}\n"
+        key=$(ask "  last.fm api key: ")
+    else
+        info "Using the last.fm key from the environment"
+    fi
+
+    # no key, or no tty to have asked on: nothing to write, and nothing worth
+    # stopping the install over
+    if [ -z "$key" ]; then
+        warn "No last.fm key. Suggestions stay off until one is in $KEY_FILE"
+        return 0
+    fi
+
+    mkdir -p "$CONFIG_DIR"
+    printf '%s\n' "$key" > "$KEY_FILE"
+    # it is a credential sitting in a directory full of ordinary state
+    chmod 600 "$KEY_FILE"
+
+    ok "last.fm key written to $KEY_FILE"
+}
+
 # -------------------------------------------------------------------- main --
 
 usage() {
@@ -619,6 +669,11 @@ Usage: install.sh [--appimage|--source]
   --source     Install the toolchain and dependencies, then build and install.
 
 With no argument the script asks.
+
+Environment:
+  LASTFM_API_KEY   Used for the suggestions on the library page. Set it here and
+                   it is written to ~/.config/yugen/lastfm_key, which is what
+                   makes it outlive the shell. The script asks if it is unset.
 EOF
 }
 
@@ -662,6 +717,8 @@ main() {
             die "Invalid choice: $mode"
             ;;
     esac
+
+    setup_lastfm_key
 
     printf "\n${GREEN}${BOLD}  Done!${RESET} Run ${BOLD}yugen${RESET} to start.\n\n"
 
