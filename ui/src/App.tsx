@@ -2840,23 +2840,9 @@ export default function App() {
                 </aside>
 
                 <main className='main'>
-                    {/* it stands down on the profile page: you are already there */}
-                    {!profile_open && (
-                        <button
-                            className='profile-avatar-btn'
-                            {...tip(username ? `Hello, ${username}` : 'Profile')}
-                            onClick={(e) => {
-                                e.stopPropagation()
-                                set_profile_open(true)
-                            }}
-                        >
-                            <Avatar data={profile_pic} size='sm' alt={username || 'Profile'} />
-                        </button>
-                    )}
-
                     {/* one row across the top of every page, the profile
                         included: the way home, then the way to find something */}
-                    <div className={`topbar${profile_open ? ' solo' : ''}`}>
+                    <div className='topbar'>
                         <button
                             className='topbar-btn'
                             {...tip('Library')}
@@ -2961,6 +2947,19 @@ export default function App() {
                             </label>
                         </div>
 
+                        {/* it stands down on the profile page: you are already there */}
+                        {!profile_open && (
+                            <button
+                                className='profile-avatar-btn'
+                                {...tip(username ? `Hello, ${username}` : 'Profile')}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    set_profile_open(true)
+                                }}
+                            >
+                                <Avatar data={profile_pic} size='sm' alt={username || 'Profile'} />
+                            </button>
+                        )}
                     </div>
 
                     {profile_open ? (

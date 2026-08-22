@@ -589,13 +589,7 @@ button {
     align-items: center;
     justify-content: center;
     gap: 0.75rem;
-    padding-right: 3.25rem;
     margin-bottom: 1.5rem;
-}
-
-/* the profile page hides the avatar, so there is nothing to keep clear of */
-.topbar.solo {
-    padding-right: 0;
 }
 
 .topbar-btn {
@@ -2507,11 +2501,12 @@ button {
 
 /* the panel's right corner, centred on the search row beside it: (1.25rem of
    panel padding + half the row) less half the avatar */
+/* it rides in the top row beside the search bar, so it keeps the row's
+   height rather than the avatar's and never stretches with it */
 .profile-avatar-btn {
-    position: absolute;
-    top: calc(1.25rem + (var(--search-h) - var(--top-btn)) / 2);
-    right: 1.5rem;
-    z-index: 26;
+    display: grid;
+    place-items: center;
+    flex: none;
     padding: 0;
     border: none;
     border-radius: 50%;
