@@ -91,9 +91,7 @@ namespace
 
      // reads the argument and return types back off the lambda's call operator
      template <typename Fn>
-     struct async_binding : async_binding<decltype(&Fn::operator())>
-     {
-     };
+     struct async_binding : async_binding<decltype(&Fn::operator())> { };
 
      template <typename Class, typename Result, typename... Args>
      struct async_binding<Result (Class::*)(Args...) const>
@@ -447,6 +445,8 @@ coco::stray start(saucer::application* app)
           }
           return "";
      });
+
+
 
      /*
       * The window is set up last, once every binding exists, so the page cannot

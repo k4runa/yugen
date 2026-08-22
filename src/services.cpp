@@ -347,7 +347,8 @@ namespace yugen
 
           for(std::size_t i = 0; i < len; i += 3)
           {
-               unsigned int b = (data[i] << 16) | (i + 1 < len ? data[i + 1] << 8 : 0) | (i + 2 < len ? data[i + 2] : 0);
+               unsigned int b = (data[i] << 16) 
+               | (i + 1 < len ? data[i + 1] << 8 : 0) | (i + 2 < len ? data[i + 2] : 0);
                result += chars[(b >> 18) & 0x3F];
                result += chars[(b >> 12) & 0x3F];
 

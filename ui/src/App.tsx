@@ -2685,7 +2685,7 @@ export default function App() {
                                         <Icon d={ICONS.search} size={15} />
                                     )}
                                     <input
-                                        placeholder={'Search \\(^o^)/'}
+                                        placeholder='Search a song ♪(´▽｀)'
                                         value={query}
                                         onChange={(e) => set_query(e.currentTarget.value)}
                                         onFocus={() => set_search_open(true)}
