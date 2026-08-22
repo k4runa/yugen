@@ -98,7 +98,8 @@ function save_pref(key: string, value: string | string[] | boolean | number) {
     }
 }
 
-type Theme = 'system' | 'light' | 'dark'
+const THEMES = ['system', 'light', 'dark'] as const
+type Theme = (typeof THEMES)[number]
 
 const VIEWS = ['library', 'liked', 'albums', 'artists', 'playlist'] as const
 type View = (typeof VIEWS)[number]
@@ -744,7 +745,7 @@ export default function App() {
     // read once, off the last tick the previous run wrote
     const saved_playback = useMemo(stored_playback, [])
 
-    const [theme, set_theme] = useState<Theme>('system')
+    const [theme, set_theme] = useState<Theme>(() => stored_pref('theme', THEMES, 'system'))
     // the switch, and how much of the cover reaches the background while it is on:
     // 0 leaves a scrim over nearly all of it, 100 is the artwork with none at all
     const [aura_on, set_aura_on] = useState(() => stored_flag('aura_on', true))
@@ -3245,7 +3246,10 @@ export default function App() {
                     <button
                         className='icon-btn tiny'
                         {...tip(`Switch to ${next_theme} theme`)}
-                        onClick={() => set_theme(next_theme)}
+                        onClick={() => {
+                            set_theme(next_theme)
+                            save_pref('theme', next_theme)
+                        }}
                     >
                         <Icon
                             d={
