@@ -1882,7 +1882,7 @@ export default function App() {
         )
     }, [current, paused, position, length, volume, queue.length, looped, shuffle_on])
 
-    const up_next = current ? queue.slice(queue.indexOf(current) + 1).slice(0, 4) : []
+    const up_next = current ? queue.slice(queue.indexOf(current) + 1).slice(0, 2) : []
 
     const NAV: { id: View; label: string; icon: string; count: number }[] = [
         {
