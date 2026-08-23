@@ -186,8 +186,13 @@ const SHELF = 10
 // how many suggestions a full shelf holds, and how deep the pass is allowed to
 // dig for them: last.fm rarely has a picture on the similar list itself, so
 // most of what is found costs one more request before it can be shown
-const SUGGESTIONS = 50
-const CANDIDATES = SUGGESTIONS * 2
+const SUGGESTIONS = 60
+const CANDIDATES = SUGGESTIONS * 4
+
+// one artist is allowed this many places on the shelf. last.fm answers a seed
+// with a lot of the same name, so without a ceiling a pass reads as one back
+// catalogue rather than as a spread of what else there is.
+const PER_ARTIST = 3
 
 // the collection's size in time: hours once there are any, minutes below that
 function format_span(seconds: number) {
@@ -225,6 +230,17 @@ const LIBRARY_VIEWS: { id: LibraryView; label: string }[] = [
     { id: 'list', label: 'List' },
     { id: 'compact-grid', label: 'Compact grid' },
     { id: 'grid', label: 'Default grid' },
+]
+
+// the shelf is the same set of records read four ways: the last one is not a
+// shape but a grouping, which is why it lives here rather than with LAYOUTS
+type SuggestionView = 'grid' | 'compact' | 'list' | 'artist'
+
+const SUGGESTION_VIEWS: { id: SuggestionView; label: string }[] = [
+    { id: 'grid', label: 'Grid' },
+    { id: 'compact', label: 'Compact' },
+    { id: 'list', label: 'List' },
+    { id: 'artist', label: 'By artist' },
 ]
 
 type Source = 'yt' | 'sc'
@@ -303,10 +319,16 @@ const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ''
 // the backend answers for one track at a time by design, so a pass is many
 // small calls rather than one big one: a sample of the tracks the listener has
 // actually marked, each asked about on its own.
-const SEEDS = [15, 25] as const
-const PER_SEED = [6, 8] as const
+const SEEDS = [60, 110] as const
+const PER_SEED = [50, 60] as const
 
-// what is on screen before 'show more'
+// a pass does not only ask about what carries a heart. this share of its seeds
+// is drawn from the rest of the folder instead, so the shelf hears from more
+// than the handful of tracks that have been marked - the ones that have are
+// still the larger half of it.
+const WIDER_SHARE = 0.4
+
+// what is on screen before 'load more'
 const SUGGESTION_PAGE = 20
 
 // every call runs on a thread of its own on the far side and ends in a request
@@ -372,6 +394,36 @@ function sample<T>(pool: T[], count: number) {
     }
 
     return rest.slice(0, wanted)
+}
+
+/*
+ * Last.fm answers a seed with a lot of the same name - ask it about one track
+ * and half the list is that track's artist - so the closest hundred candidates
+ * can easily be a dozen artists deep and nothing else. This deals them out in
+ * rounds instead: everyone's closest first, then everyone's second closest,
+ * and so on, up to PER_ARTIST each. The order within an artist is kept, so the
+ * list still reads closest-first; it just stops being one name at a time.
+ */
+function spread_artists(tracks: Suggestion[]) {
+    const by_artist = new Map<string, Suggestion[]>()
+
+    for (const track of tracks) {
+        const name = fold(track.artist) || track.key
+        const held = by_artist.get(name)
+
+        if (held) held.push(track)
+        else by_artist.set(name, [track])
+    }
+
+    const dealt: Suggestion[] = []
+
+    for (let round = 0; round < PER_ARTIST; round++) {
+        for (const held of by_artist.values()) {
+            if (held[round]) dealt.push(held[round])
+        }
+    }
+
+    return dealt
 }
 
 // a fixed number of workers over one list: whichever lane comes free takes the
@@ -1268,6 +1320,20 @@ export default function App() {
     // a pass left in the air must not land on top of the one that replaced it
     const similar_run = useRef(0)
     const asked_similar = useRef(false)
+    // everything the shelf has already offered this session. another pass reads
+    // it as a list of what not to come back with, which is what makes the
+    // button worth pressing twice.
+    const served = useRef(new Set<string>())
+    // how the shelf is read, and the menu that changes it. it is the
+    // suggestions' own setting - the shelves above keep theirs.
+    const [suggestion_view, set_suggestion_view] = useState<SuggestionView>(() =>
+        stored_pref(
+            'suggestion_view',
+            SUGGESTION_VIEWS.map((option) => option.id),
+            'grid',
+        ),
+    )
+    const [suggestion_menu, set_suggestion_menu] = useState(false)
     // suggestions being fetched, the ones that came in, and the ones youtube had
     // nothing for. all keyed by the suggestion, so a card answers for itself.
     // 'fetched' is kept because a download is named after the search result
@@ -1449,6 +1515,21 @@ export default function App() {
             window.removeEventListener('resize', close)
         }
     }, [filters])
+
+    // the suggestions' own view menu, closed the same way the sort menu is
+    useEffect(() => {
+        if (!suggestion_menu) return
+
+        const close = () => set_suggestion_menu(false)
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+        }
+    }, [suggestion_menu])
 
     useEffect(() => {
         if (!menu) return
@@ -2080,19 +2161,48 @@ export default function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- both helpers read metadata_map
     }, [songs, metadata_map])
 
-    // the seeds: liked and favourite alike, each one only once. a favourite that
-    // has since left the folder is not one - the backend reads the file to know
-    // what it is asking about.
-    const seeds = useMemo(() => {
+    /*
+     * What the shelf is drawn from, in two halves.
+     *
+     * 'marked' is everything the listener has pointed at - liked, favourited,
+     * or put in a playlist by hand - and it is still where most of a pass goes.
+     * 'rest' is the remainder of the folder: tracks nobody has said anything
+     * about, which are just as much a part of the collection and never used to
+     * get a say. A pass takes from both, so two runs over the same small pile
+     * of hearts no longer come back with the same names.
+     *
+     * A favourite whose file has left the folder is in neither: the backend
+     * reads the file to know what it is asking about.
+     */
+    const seed_pools = useMemo(() => {
         const on_disk = new Set(songs)
-        const pool = new Set(songs.filter((name) => liked.has(name)))
+        const marked = new Set(songs.filter((name) => liked.has(name)))
 
         for (const track of favorites) {
-            if (on_disk.has(track.file_path)) pool.add(track.file_path)
+            if (on_disk.has(track.file_path)) marked.add(track.file_path)
         }
 
-        return [...pool]
-    }, [songs, liked, favorites])
+        for (const tracks of Object.values(playlists)) {
+            for (const name of tracks) if (on_disk.has(name)) marked.add(name)
+        }
+
+        return {
+            marked: [...marked],
+            rest: songs.filter((name) => !marked.has(name)),
+        }
+    }, [songs, liked, favorites, playlists])
+
+    // one pass worth of seeds: mostly what has been marked, topped up from the
+    // rest of the folder. with nothing marked at all the whole draw comes from
+    // there, which is how a fresh library gets a shelf.
+    function pick_seeds() {
+        const { marked, rest } = seed_pools
+        const wanted = between(SEEDS)
+        const wide = Math.min(Math.round(wanted * WIDER_SHARE), rest.length)
+        const close = sample(marked, wanted - wide)
+
+        return [...close, ...sample(rest, wanted - close.length)]
+    }
 
     /*
      * The shelf is filled rather than filtered. Last.fm hardly ever carries a
@@ -2130,12 +2240,28 @@ export default function App() {
         return filled.sort((a, b) => b.match - a.match)
     }
 
-    async function load_similar() {
-        if (!seeds.length || similar_busy) return
+    /*
+     * A pass, in one of three moods.
+     *
+     * 'new' is the shelf being filled for the first time. 'again' is the pass
+     * button: same kind of thing, deliberately not the same things - it draws
+     * new seeds and refuses everything the shelf has already offered, so what
+     * comes back is a different corner of the same taste. 'more' is the load
+     * button once the cards run out: another dig, added under what is there
+     * rather than replacing it.
+     */
+    async function load_similar(mood: 'new' | 'again' | 'more' = 'new') {
+        const { marked, rest } = seed_pools
+        if (!marked.length && !rest.length) return
+        if (similar_busy) return
 
         const run = ++similar_run.current
 
         asked_similar.current = true
+
+        // a fresh shelf forgets what it has shown; the other two moods are the
+        // ones that lean on it
+        if (mood === 'new') served.current.clear()
 
         // the folder before the spinner, and not the other way around: the very
         // first pass is kicked off by the page opening, and react wants nothing
@@ -2143,10 +2269,10 @@ export default function App() {
         const dir = await music_dir()
 
         set_similar_busy(true)
-        set_cards_shown(SUGGESTION_PAGE)
+        if (mood !== 'more') set_cards_shown(SUGGESTION_PAGE)
 
         try {
-            const picked = sample(seeds, between(SEEDS))
+            const picked = pick_seeds()
 
             const answers = await in_lanes(picked, LANES, (name) =>
                 bridge()
@@ -2192,10 +2318,18 @@ export default function App() {
                 }
             }
 
-            // closest first, and only as deep as the shelf could ever need
-            const candidates = found
-                .sort((a, b) => b.match - a.match)
-                .slice(0, CANDIDATES)
+            // what the shelf has already been shown is held back - unless doing
+            // so would leave it half empty, in which case a repeat beats a gap
+            const unseen = found.filter((track) => !served.current.has(track.key))
+            const pool = unseen.length >= SUGGESTIONS ? unseen : found
+
+            if (pool === found) served.current.clear()
+
+            // closest first, no artist taking over, and only as deep as the
+            // shelf could ever need
+            const candidates = spread_artists(
+                pool.sort((a, b) => b.match - a.match),
+            ).slice(0, CANDIDATES)
 
             const shown = await with_pictures(
                 candidates,
@@ -2205,10 +2339,33 @@ export default function App() {
 
             if (run !== similar_run.current) return
 
-            set_similar(shown)
+            for (const track of shown) served.current.add(track.key)
+
+            // 'more' is added under what is on screen, and only the names that
+            // are not on it already
+            set_similar((current) => {
+                if (mood !== 'more') return shown
+
+                const here = new Set(current.map((track) => track.key))
+
+                return [...current, ...shown.filter((track) => !here.has(track.key))]
+            })
+
+            if (mood === 'more') set_cards_shown((count) => count + SUGGESTION_PAGE)
         } finally {
             if (run === similar_run.current) set_similar_busy(false)
         }
+    }
+
+    // the load button: more of what is already here first, and once that runs
+    // out, another dig for names to put under it
+    function load_more() {
+        if (cards_shown < similar.length) {
+            set_cards_shown(cards_shown + SUGGESTION_PAGE)
+            return
+        }
+
+        void load_similar('more')
     }
 
     // the first pass waits until the library page is actually open: it is a
@@ -2216,14 +2373,14 @@ export default function App() {
     // for one. after that it stands until the refresh button asks again.
     useEffect(() => {
         if (asked_similar.current || profile_open || !overview) return
-        if (!seeds.length) return
+        if (!seed_pools.marked.length && !seed_pools.rest.length) return
 
         // started off the effect rather than in it: the pass sets nothing until
         // it has the music folder back, but a plain call here still reads as a
         // synchronous one
-        void Promise.resolve().then(load_similar)
+        void Promise.resolve().then(() => load_similar())
         // eslint-disable-next-line react-hooks/exhaustive-deps -- the cue is the page and the seeds
-    }, [profile_open, overview, seeds])
+    }, [profile_open, overview, seed_pools])
 
     const suggestion_name = (track: Suggestion) =>
         [track.artist, track.title].filter(Boolean).join(' - ')
@@ -2341,10 +2498,10 @@ export default function App() {
 
     // a shelf is a row of covers, so it wants enough of them to read as one:
     // under four it is a gap with a heading on top, and the page is better off
-    // without it. the suggestions go by the seeds instead - nothing marked yet
-    // means the pass could only come back empty.
+    // without it. the suggestions go by the seeds instead - an empty folder is
+    // the only case where the pass could only come back empty.
     const has_arrivals = overview && arrivals.length >= 4
-    const has_more = overview && seeds.length > 0
+    const has_more = overview && songs.length > 0
 
     const queue = shuffle_on && shuffled?.key === listed_key ? shuffled.order : listed
 
@@ -2940,29 +3097,74 @@ export default function App() {
         )
     }
 
+    // where a suggestion stands: on its way in, already here, or nowhere to be
+    // found. the card and the row both read it, and both say the same thing.
+    function suggestion_state(track: Suggestion) {
+        const busy = getting.includes(track.key)
+        const here = library_keys.has(track.key) || fetched.includes(track.key)
+        const gone = missing.includes(track.key)
+
+        return {
+            busy,
+            here,
+            gone,
+            held: busy || here,
+            hint: here
+                ? 'Already in your library'
+                : busy
+                  ? 'Downloading...'
+                  : gone
+                    ? 'Nothing to download under that name'
+                    : 'Download it with the button, right-click for more',
+            note: here
+                ? 'In your library'
+                : busy
+                  ? 'Downloading...'
+                  : gone
+                    ? 'Nothing found'
+                    : track.artist || 'Unknown artist',
+        }
+    }
+
+    // the badge is the button: it fetches straight away. the question is still
+    // there, one right-click away on the card.
+    function suggestion_badge(track: Suggestion, state: ReturnType<typeof suggestion_state>) {
+        return (
+            <button
+                type='button'
+                className={`badge${state.held ? ' on' : ''}`}
+                disabled={state.held}
+                aria-label={state.here ? 'Already in your library' : 'Download'}
+                onClick={(e) => {
+                    e.stopPropagation()
+                    if (!state.held) void download_suggestion(track)
+                }}
+            >
+                {state.here ? (
+                    <Icon d={ICONS.check} size={14} />
+                ) : state.busy ? (
+                    <span className='spinner' />
+                ) : (
+                    <Icon d={ICONS.download} size={14} />
+                )}
+            </button>
+        )
+    }
+
     // one suggestion, built like every other card on the page: a cover, a
     // title, an artist. what makes it different is that it is not here yet, so
     // the badge fetches it and a right-click asks first.
     function suggestion_card(track: Suggestion) {
-        const busy = getting.includes(track.key)
-        const here = library_keys.has(track.key) || fetched.includes(track.key)
-        const gone = missing.includes(track.key)
-        const held = busy || here
+        const state = suggestion_state(track)
 
         return (
             <div
                 key={track.key}
-                className={`album suggestion${here ? ' owned' : ''}${busy ? ' busy' : ''}`}
-                {...tip(
-                    here
-                        ? 'Already in your library'
-                        : busy
-                          ? 'Downloading...'
-                          : gone
-                            ? 'Nothing to download under that name'
-                            : 'Download it with the button, right-click for more',
-                )}
-                onContextMenu={(e) => !held && context({ kind: 'suggestion', track })(e)}
+                className={`album suggestion${state.here ? ' owned' : ''}${
+                    state.busy ? ' busy' : ''
+                }`}
+                {...tip(state.hint)}
+                onContextMenu={(e) => !state.held && context({ kind: 'suggestion', track })(e)}
             >
                 <img
                     className='album-cover'
@@ -2974,37 +3176,40 @@ export default function App() {
                     onError={(e) => e.currentTarget.classList.add('gone')}
                 />
 
-                <button
-                    type='button'
-                    className={`badge${held ? ' on' : ''}`}
-                    disabled={held}
-                    aria-label={here ? 'Already in your library' : 'Download'}
-                    // the badge is the button: it fetches straight away. the
-                    // question is still there, one right-click away on the card
-                    onClick={(e) => {
-                        e.stopPropagation()
-                        if (!held) void download_suggestion(track)
-                    }}
-                >
-                    {here ? (
-                        <Icon d={ICONS.check} size={14} />
-                    ) : busy ? (
-                        <span className='spinner' />
-                    ) : (
-                        <Icon d={ICONS.download} size={14} />
-                    )}
-                </button>
+                {suggestion_badge(track, state)}
 
                 <div className='title ellipsis'>{track.title}</div>
-                <div className='muted ellipsis'>
-                    {here
-                        ? 'In your library'
-                        : busy
-                          ? 'Downloading...'
-                          : gone
-                            ? 'Nothing found'
-                            : track.artist || 'Unknown artist'}
+                <div className='muted ellipsis'>{state.note}</div>
+            </div>
+        )
+    }
+
+    // the same suggestion laid down instead of stood up: the list view trades
+    // the cover for the room to read a long name in
+    function suggestion_row(track: Suggestion) {
+        const state = suggestion_state(track)
+
+        return (
+            <div
+                key={track.key}
+                className={`sugg-row${state.here ? ' owned' : ''}${state.busy ? ' busy' : ''}`}
+                {...tip(state.hint)}
+                onContextMenu={(e) => !state.held && context({ kind: 'suggestion', track })(e)}
+            >
+                <img
+                    className='row-cover'
+                    src={track.image}
+                    alt=''
+                    loading='lazy'
+                    onError={(e) => e.currentTarget.classList.add('gone')}
+                />
+
+                <div className='row-main'>
+                    <div className='title ellipsis'>{track.title}</div>
+                    <div className='muted ellipsis'>{state.note}</div>
                 </div>
+
+                {suggestion_badge(track, state)}
             </div>
         )
     }
@@ -3013,6 +3218,48 @@ export default function App() {
     // it is built the same way they are, because it is the same kind of thing -
     // records to look at - and only the click underneath differs.
     function suggestions() {
+        const on_screen = similar.slice(0, cards_shown)
+
+        // 'by artist' is the only view that is not a shape: the same cards,
+        // gathered under the name they came from, the fullest name first
+        const groups = new Map<string, Suggestion[]>()
+
+        if (suggestion_view === 'artist') {
+            for (const track of on_screen) {
+                const name = track.artist || 'Unknown artist'
+                const held = groups.get(name)
+
+                if (held) held.push(track)
+                else groups.set(name, [track])
+            }
+        }
+
+        const shelf_body =
+            suggestion_view === 'list' ? (
+                <section className='suggestion-list'>{on_screen.map(suggestion_row)}</section>
+            ) : suggestion_view === 'artist' ? (
+                <div className='by-artist'>
+                    {[...groups.entries()]
+                        .sort((a, b) => b[1].length - a[1].length)
+                        .map(([name, tracks]) => (
+                            <section key={name} className='artist-group'>
+                                <div className='group-head'>
+                                    <span className='ellipsis'>{name}</span>
+                                    <span className='muted'>{tracks.length}</span>
+                                </div>
+
+                                <section className='card-row compact'>
+                                    {tracks.map(suggestion_card)}
+                                </section>
+                            </section>
+                        ))}
+                </div>
+            ) : (
+                <section className={`card-row${suggestion_view === 'compact' ? ' compact' : ''}`}>
+                    {on_screen.map(suggestion_card)}
+                </section>
+            )
+
         return (
             <section className='block discover'>
                 <div className='shelf-head'>
@@ -3023,30 +3270,76 @@ export default function App() {
                             : `${similar.length} tracks`}
                     </span>
 
-                    <button
-                        className={`see-all${similar_busy ? ' busy' : ''}`}
-                        aria-disabled={similar_busy}
-                        onClick={() => load_similar()}
-                    >
-                        <Icon d={ICONS.refresh} size={13} />
-                        Another pass
-                    </button>
+                    <div className='shelf-tools'>
+                        {/* a whole new pass rather than more of this one: new
+                            seeds, and nothing it has already offered */}
+                        <button
+                            type='button'
+                            className='pill-btn pass'
+                            disabled={similar_busy}
+                            {...tip('Ask again, for different tracks')}
+                            onClick={() => void load_similar('again')}
+                        >
+                            <Icon d={ICONS.refresh} size={13} />
+                            Another pass
+                        </button>
+
+                        <div className='filter-wrap'>
+                            <button
+                                type='button'
+                                className={`icon-btn filter${suggestion_menu ? ' on' : ''}`}
+                                {...tip('View as')}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    set_suggestion_menu(!suggestion_menu)
+                                }}
+                            >
+                                <Icon d={ICONS.filter} size={16} />
+                            </button>
+
+                            {suggestion_menu && (
+                                <div
+                                    className='filter-menu'
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <div className='filter-label'>View as</div>
+                                    {SUGGESTION_VIEWS.map((option) => (
+                                        <button
+                                            key={option.id}
+                                            onClick={() => {
+                                                set_suggestion_view(option.id)
+                                                save_pref('suggestion_view', option.id)
+                                                set_suggestion_menu(false)
+                                            }}
+                                        >
+                                            <span className='ellipsis'>{option.label}</span>
+                                            {suggestion_view === option.id && (
+                                                <Icon d={ICONS.check} size={14} />
+                                            )}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
 
                 {similar.length ? (
                     <>
-                        <section className='card-row'>
-                            {similar.slice(0, cards_shown).map(suggestion_card)}
-                        </section>
+                        {shelf_body}
 
-                        {similar.length > cards_shown && (
-                            <button
-                                className='pill-btn more-seeds'
-                                onClick={() => set_cards_shown(cards_shown + SUGGESTION_PAGE)}
-                            >
-                                Show more
-                            </button>
-                        )}
+                        {/* there is always more to dig for, so the button is
+                            always there: it uncovers what the pass already
+                            found first, and goes back out once that runs out */}
+                        <button
+                            className='pill-btn more-seeds'
+                            disabled={similar_busy}
+                            onClick={load_more}
+                        >
+                            {similar_busy && cards_shown >= similar.length
+                                ? 'Looking...'
+                                : 'Load more'}
+                        </button>
                     </>
                 ) : similar_busy ? (
                     // the shape of the shelf, so the page does not jump when it lands
@@ -3862,9 +4155,9 @@ export default function App() {
                         )}
 
                         {/* the shelves above are what is already here; this is
-                            what they point at. no seeds means nothing has been
-                            marked yet, and a shelf that can only be empty is not
-                            worth the room. */}
+                            what they point at. an empty folder is the one case
+                            with nothing to ask about, and a shelf that can only
+                            be empty is not worth the room. */}
                         {has_more && suggestions()}
                     </div>
 
