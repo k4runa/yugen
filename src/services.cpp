@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -688,9 +689,13 @@ namespace yugen
      {
           const json data = load_playlists();
 
-          if(!data.contains(playlist_name)) return {};
+          if(!data.contains(playlist_name) || data[playlist_name].empty()) return {};
 
-          return data.at(playlist_name).get<std::vector<std::string>>();
+          auto& playlist = data.at(playlist_name);
+          
+          if(!playlist.contains("songs")) return {};
+
+          return playlist.at("songs").get<std::vector<std::string>>();
      }
 
      bool MusicManager::create_playlist(const std::string& playlist_name)
@@ -699,7 +704,7 @@ namespace yugen
 
           if(!data.contains(playlist_name))
           {
-               data[playlist_name] = json::array();
+               data[playlist_name] = json::object();
           }
 
           return save_playlists(data);
@@ -732,31 +737,34 @@ namespace yugen
 
      bool MusicManager::add_to_playlist(const std::string& playlist_name, const std::string& file_path)
      {
+          if(playlist_name.empty() || file_path.empty()) return false;
+
           json data = load_playlists();
 
           if(!data.contains(playlist_name)) return false;
 
-          auto& playlist = data.at(playlist_name);
+          auto& playlist = data[playlist_name];
 
-          if(std::find(playlist.begin(), playlist.end(), file_path) != playlist.end()) return false;
+          if(std::find(playlist["songs"].begin(), playlist["songs"].end(), file_path) != playlist["songs"].end()) return false;
 
-          playlist.push_back(file_path);
+          playlist["songs"].push_back(file_path);
 
           return save_playlists(data);
      }
 
      bool MusicManager::remove_from_playlist(const std::string& playlist_name, const std::string& file_path)
      {
+          if(playlist_name.empty() || file_path.empty()) return false;
           json data = load_playlists();
 
           if(!data.contains(playlist_name)) return false;
 
           auto& playlist = data.at(playlist_name);
-          auto it = std::find(playlist.begin(), playlist.end(), file_path);
+          auto it = std::find(playlist["songs"].begin(), playlist["songs"].end(), file_path);
 
-          if(it == playlist.end()) return false;
+          if(it == playlist["songs"].end()) return false;
 
-          playlist.erase(it);
+          playlist["songs"].erase(it);
 
           return save_playlists(data);
      }
@@ -1440,5 +1448,29 @@ namespace yugen
           }();
 
           return key;
+     }
+
+     bool MusicManager::set_or_update_playlist_cover(const std::string& playlist_name, const std::string& base64_pic) 
+     {
+          if(playlist_name.empty() || base64_pic.empty()) return false;
+          json data = load_playlists();
+          if(!data.contains(playlist_name)) return false;
+
+          auto& playlist = data[playlist_name];
+          playlist["cover"] = base64_pic;
+          return save_playlists(data);
+     }
+
+     std::string MusicManager::get_playlist_cover(const std::string &playlist_name) 
+     {
+          if(playlist_name.empty()) return "";
+          json data = load_playlists();
+          if(!data.contains(playlist_name)) return "";
+
+          auto& playlist = data[playlist_name];
+
+          if(playlist.empty() || playlist["cover"].empty()) return "";
+
+          return playlist["cover"];
      }
 }

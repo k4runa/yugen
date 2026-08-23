@@ -460,6 +460,14 @@ coco::stray start(saucer::application* app)
           return mm::get_track_cover(artist, track_name);
      });
 
+     expose_async(webview,"get_playlist_cover", [](std::string playlist_name){
+          return mm::get_playlist_cover(playlist_name);
+     });
+
+     expose_async(webview,"set_playlist_cover", [](std::string playlist_name, std::string base64_pic){
+          return mm::set_or_update_playlist_cover(playlist_name, base64_pic);
+     });
+
 
      /*
       * The window is set up last, once every binding exists, so the page cannot

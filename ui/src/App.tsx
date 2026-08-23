@@ -113,13 +113,27 @@ type View = (typeof VIEWS)[number]
  */
 const PLAYBACK_KEY = 'yugen.playback'
 
+/*
+ * Shuffle is three states rather than a switch: off, the listing you are
+ * standing in, or the whole library. Which one is on says what the order was
+ * drawn from - and once it is drawn it stands, so walking into another playlist
+ * does not quietly deal a new one behind whatever is playing.
+ */
+type Shuffle = 'off' | 'listing' | 'all'
+
+const SHUFFLES: { id: Shuffle; label: string; hint: string }[] = [
+    { id: 'off', label: 'No shuffle', hint: 'Play in order' },
+    { id: 'listing', label: 'Shuffle this listing', hint: 'Only what is on screen' },
+    { id: 'all', label: 'Shuffle everything', hint: 'The whole library' },
+]
+
 type Playback = {
     song: string
     position: number
     // the listing the queue was built from, so prev/next carry on where they left off
     view: View
     selection: string | null
-    shuffle: boolean
+    shuffle: Shuffle
 }
 
 function stored_playback(): Playback | null {
@@ -136,7 +150,14 @@ function stored_playback(): Playback | null {
                     : 0,
             view: VIEWS.includes(value.view) ? value.view : 'library',
             selection: typeof value.selection === 'string' ? value.selection : null,
-            shuffle: value.shuffle === true,
+            // it was a switch before it was three states, and 'on' meant the
+            // listing you were standing in
+            shuffle:
+                value.shuffle === true
+                    ? 'listing'
+                    : SHUFFLES.some((option) => option.id === value.shuffle)
+                      ? value.shuffle
+                      : 'off',
         }
     } catch {
         return null
@@ -473,6 +494,10 @@ type Bridge = {
     unlike_song(name: string): Promise<void>
     get_playlists(): Promise<string[]>
     get_playlist(playlist: string): Promise<string[]>
+    // a playlist's own sleeve, as raw base64 the same way a track's cover comes
+    // over. a playlist that has never been given one answers with nothing.
+    get_playlist_cover(playlist: string): Promise<string>
+    set_playlist_cover(playlist: string, base64_pic: string): Promise<boolean>
     create_playlist(playlist: string): Promise<boolean>
     // how many playlists exist, which is what a new one is named after
     get_playlist_count(): Promise<number>
@@ -999,11 +1024,15 @@ const CROP_ZOOM = [1, 4] as const
 type CropProps = {
     src: string
     busy: boolean
+    // an avatar is a circle and a sleeve is a square: the window and the crop
+    // are the same either way, and only the guide painted over them changes
+    shape: 'round' | 'square'
+    title: string
     on_cancel: () => void
     on_done: (data_url: string) => void
 }
 
-function CropDialog({ src, busy, on_cancel, on_done }: CropProps) {
+function CropDialog({ src, busy, shape, title, on_cancel, on_done }: CropProps) {
     const [natural, set_natural] = useState<{ w: number; h: number } | null>(null)
     const [zoom, set_zoom] = useState(1)
     const [offset, set_offset] = useState({ x: 0, y: 0 })
@@ -1104,7 +1133,7 @@ function CropDialog({ src, busy, on_cancel, on_done }: CropProps) {
         <div className='overlay crop-overlay' onClick={busy ? undefined : on_cancel}>
             <div className='dialog crop-dialog' onClick={(e) => e.stopPropagation()}>
                 <div className='dialog-head'>
-                    <h3>Crop photo</h3>
+                    <h3>{title}</h3>
                     <button
                         className='icon-btn tiny'
                         {...tip('Close')}
@@ -1139,10 +1168,10 @@ function CropDialog({ src, busy, on_cancel, on_done }: CropProps) {
                             transform: `translate(${offset.x}px, ${offset.y}px)`,
                         }}
                     />
-                    {/* the circle is only a guide - it is painted over the
+                    {/* the guide is only a guide - it is painted over the
                         picture and takes no clicks, so the drag underneath it
                         keeps working across the whole window */}
-                    <div className='crop-ring' />
+                    <div className={`crop-ring ${shape}`} />
                 </div>
 
                 <input
@@ -1200,9 +1229,13 @@ export default function App() {
     const [profile_edit_open, set_profile_edit_open] = useState(false)
     const [username_draft, set_username_draft] = useState('')
     const [bio_draft, set_bio_draft] = useState('')
-    const [avatar_busy, set_avatar_busy] = useState(false)
-    // the photo waiting to be cropped, held as a data url while the window is up
+    const [crop_busy, set_crop_busy] = useState(false)
+    // the photo waiting to be cropped, held as a data url while the window is
+    // up, and what it is being cropped for: the profile, or a playlist by name
     const [crop_src, set_crop_src] = useState('')
+    const [crop_for, set_crop_for] = useState<{ kind: 'avatar' } | { kind: 'playlist'; name: string }>(
+        { kind: 'avatar' },
+    )
 
     const [volume, set_volume_state] = useState(1)
     // what unmuting goes back to, so the level survives a trip through zero
@@ -1223,11 +1256,11 @@ export default function App() {
     const [length, set_length] = useState(0)
     const [position, set_position] = useState(0)
     const [seeking, set_seeking] = useState<number | null>(null)
-    const [shuffle_on, set_shuffle_on] = useState(saved_playback?.shuffle ?? false)
-    const [shuffled, set_shuffled] = useState<{
-        key: string
-        order: string[]
-    } | null>(null)
+    const [shuffle_mode, set_shuffle_mode] = useState<Shuffle>(saved_playback?.shuffle ?? 'off')
+    // the order itself, kept apart from the mode: it is dealt once, by a click,
+    // and then it is the queue until something asks for another one
+    const [shuffled, set_shuffled] = useState<string[] | null>(null)
+    const [shuffle_menu, set_shuffle_menu] = useState<{ x: number; y: number } | null>(null)
 
     // name -> whatever lrclib returned for it, '' included: a track with no lyrics
     // should be asked about once and then left alone
@@ -1258,6 +1291,8 @@ export default function App() {
 
     // name -> its tracks, kept in sync with playlists.json
     const [playlists, set_playlists] = useState<Record<string, string[]>>({})
+    // name -> the sleeve it was given, for the ones that have been given one
+    const [playlist_covers, set_playlist_covers] = useState<Record<string, string>>({})
     const [pins, set_pins] = useState<string[]>(stored_pins)
 
     const [library_menu, set_library_menu] = useState<{ x: number; y: number } | null>(null)
@@ -1360,6 +1395,20 @@ export default function App() {
     useEffect(() => {
         document.documentElement.style.setProperty('--aura', `${aura / 100}`)
     }, [aura])
+
+    useEffect(() => {
+        if (!shuffle_menu) return
+
+        const close = () => set_shuffle_menu(null)
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+        }
+    }, [shuffle_menu])
 
     useEffect(() => {
         if (!volume_menu) return
@@ -1661,8 +1710,8 @@ export default function App() {
     useEffect(() => {
         if (!current) return
 
-        save_playback({ song: current, position, view, selection, shuffle: shuffle_on })
-    }, [current, position, view, selection, shuffle_on])
+        save_playback({ song: current, position, view, selection, shuffle: shuffle_mode })
+    }, [current, position, view, selection, shuffle_mode])
 
     async function fetch_songs() {
         set_loading(true)
@@ -1784,14 +1833,25 @@ export default function App() {
         }
     }
 
-    // playlists.json is small, so the whole thing is pulled in one go
+    // playlists.json is small, so the whole thing is pulled in one go - sleeves
+    // included. a backend without the cover calls still answers for the tracks,
+    // so each sleeve fails on its own rather than taking the list down with it.
     async function sync_playlists() {
         try {
             const names = await bridge().get_playlists()
-            const tracks = await Promise.all(names.map((name) => bridge().get_playlist(name)))
+            const [tracks, sleeves] = await Promise.all([
+                Promise.all(names.map((name) => bridge().get_playlist(name))),
+                Promise.all(
+                    names.map((name) => bridge().get_playlist_cover(name).catch(() => '')),
+                ),
+            ])
 
             const map = Object.fromEntries(names.map((name, i) => [name, tracks[i]]))
+
             set_playlists(map)
+            set_playlist_covers(
+                Object.fromEntries(names.map((name, i) => [name, sleeves[i]]).filter(([, art]) => art)),
+            )
 
             return map
         } catch {
@@ -2473,9 +2533,6 @@ export default function App() {
         save_pref(LAYOUT_PREFS[layout_key], next)
     }
 
-    // prev/next walk the shuffled order when shuffle is on, otherwise the view order
-    const listed_key = listed.join('\u0000')
-
     // the newest of what is here. files with no date on them cannot answer,
     // so the shelf goes away with them.
     const arrivals = useMemo(
@@ -2496,6 +2553,13 @@ export default function App() {
         [songs, metadata_map],
     )
 
+    // the same sum over whatever is on screen, for the head of a playlist
+    const listed_span = useMemo(
+        () => listed.reduce((total, name) => total + length_of(name), 0),
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- length_of reads metadata_map
+        [listed, metadata_map],
+    )
+
     // a shelf is a row of covers, so it wants enough of them to read as one:
     // under four it is a gap with a heading on top, and the page is better off
     // without it. the suggestions go by the seeds instead - an empty folder is
@@ -2503,22 +2567,51 @@ export default function App() {
     const has_arrivals = overview && arrivals.length >= 4
     const has_more = overview && songs.length > 0
 
-    const queue = shuffle_on && shuffled?.key === listed_key ? shuffled.order : listed
+    const queue = shuffle_mode !== 'off' && shuffled?.length ? shuffled : listed
 
-    // the backend owns the shuffling, so re-ask whenever the toggle or the listing changes
-    useEffect(() => {
-        if (!shuffle_on) return
+    /*
+     * The order is dealt on the click and not a moment after. It used to be an
+     * effect over the listing, which meant every playlist, album or artist you
+     * opened threw the running order away and dealt another one - so shuffle
+     * never got to the end of anything. Now it stands until it is asked again.
+     */
+    async function shuffle_into(mode: Shuffle) {
+        set_shuffle_mode(mode)
 
-        let cancelled = false
-        bridge()
-            .shuffle(listed)
-            .then((order) => !cancelled && set_shuffled({ key: listed_key, order }))
-
-        return () => {
-            cancelled = true
+        if (mode === 'off') {
+            set_shuffled(null)
+            return
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- listed_key stands in for listed
-    }, [shuffle_on, listed_key])
+
+        // the backend owns the shuffling
+        const pool = mode === 'all' ? songs : listed
+        set_shuffled(await bridge().shuffle(pool))
+    }
+
+    /*
+     * The head of a playlist plays that playlist, whatever the queue happens to
+     * be holding from wherever it was dealt. On 'shuffle this listing' that
+     * means dealing a fresh order over these tracks - pressing Play on a page
+     * should not start somewhere else.
+     */
+    async function play_listing() {
+        if (!listed.length) return
+
+        if (shuffle_mode === 'listing') {
+            const order = await bridge().shuffle(listed)
+
+            set_shuffled(order)
+            await play_music(order[0] ?? listed[0])
+
+            return
+        }
+
+        await play_music(listed[0])
+    }
+
+    // off, then what is on screen, then everything, then off again
+    const next_shuffle = (): Shuffle =>
+        shuffle_mode === 'off' ? 'listing' : shuffle_mode === 'listing' ? 'all' : 'off'
 
     useEffect(() => {
         const on_key = (e: KeyboardEvent) => {
@@ -2586,7 +2679,7 @@ export default function App() {
             else if (cmd === 'volume') change_volume(arg)
             else if (cmd === 'loop') {
                 if (arg > 0 !== looped) toggle_loop()
-            } else if (cmd === 'shuffle') set_shuffle_on(arg > 0)
+            } else if (cmd === 'shuffle') void shuffle_into(arg > 0 ? 'listing' : 'off')
         }
     })
 
@@ -2643,10 +2736,10 @@ export default function App() {
                 queue.length > 1,
                 queue.length > 1,
                 looped,
-                shuffle_on,
+                shuffle_mode !== 'off',
             ),
         )
-    }, [current, paused, position, length, volume, queue.length, looped, shuffle_on])
+    }, [current, paused, position, length, volume, queue.length, looped, shuffle_mode])
 
     const up_next = current ? queue.slice(queue.indexOf(current) + 1).slice(0, 2) : []
 
@@ -2847,24 +2940,46 @@ export default function App() {
         })
     }
 
-    // the picked file does not go straight to the profile: it opens the crop
-    // window first, and only what is framed there is ever written
-    async function pick_avatar(e: React.ChangeEvent<HTMLInputElement>) {
+    // a picked file does not go straight to whatever asked for it: it opens the
+    // crop window first, and only what is framed there is ever written
+    async function pick_image(
+        e: React.ChangeEvent<HTMLInputElement>,
+        target: typeof crop_for,
+    ) {
         const file = e.currentTarget.files?.[0]
         e.currentTarget.value = ''
         if (!file) return
 
+        set_crop_for(target)
         set_crop_src(await read_as_data_url(file))
     }
 
-    async function save_avatar(data_url: string) {
-        set_avatar_busy(true)
+    // a profile picture is stored as the whole data url - the mime type varies
+    // and travels with it - but a cover is base64 on its own, the same as the
+    // ones read off a file's tags, because that is what Cover puts back
+    const raw_base64 = (data_url: string) => data_url.slice(data_url.indexOf(',') + 1)
+
+    async function save_crop(data_url: string) {
+        set_crop_busy(true)
         try {
-            const ok = await bridge().set_profile_picture(data_url)
-            if (ok) set_profile_pic(await bridge().get_profile_picture())
+            if (crop_for.kind === 'avatar') {
+                const ok = await bridge().set_profile_picture(data_url)
+                if (ok) set_profile_pic(await bridge().get_profile_picture())
+            } else {
+                const name = crop_for.name
+                const ok = await bridge().set_playlist_cover(name, raw_base64(data_url))
+
+                if (ok) {
+                    // read back rather than trust the round trip: the backend
+                    // is what the sidebar will be showing from here on
+                    const saved = await bridge().get_playlist_cover(name)
+                    set_playlist_covers((prev) => ({ ...prev, [name]: saved }))
+                }
+            }
+
             set_crop_src('')
         } finally {
-            set_avatar_busy(false)
+            set_crop_busy(false)
         }
     }
 
@@ -2872,6 +2987,30 @@ export default function App() {
     const cover = (name: string, className: string) => (
         <Cover data={cover_of(name)} alt={title_of(name)} className={className} />
     )
+
+    // an album's picture is its own and an artist's is a face. a playlist's may
+    // be either: one it was given, or one borrowed off the first track inside
+    // it. Either way it is the one row that carries a mark saying what it is,
+    // tucked into the corner of the picture.
+    const row_cover = (
+        row: { kind: Shelf; name: string; art: string },
+        className: string,
+        size: number,
+    ) =>
+        row.kind === 'playlists' ? (
+            <span className={`cover-mark ${className}-wrap`}>
+                <Cover data={row.art} alt={row.name} className={className} />
+                <span className='kind-mark' aria-hidden>
+                    <Icon d={ICONS.playlist} size={size} />
+                </span>
+            </span>
+        ) : (
+            <Cover
+                data={row.art}
+                alt={row.name}
+                className={`${className}${row.kind === 'artists' ? ' round' : ''}`}
+            />
+        )
 
     const heart = (name: string, className?: string, size?: number) => (
         <Heart
@@ -3369,9 +3508,13 @@ export default function App() {
         return rank(a) !== rank(b) ? rank(a) - rank(b) : a.localeCompare(b)
     })
 
-    // a playlist shows the cover of the first track that has one
+    // a playlist shows the sleeve it was given. one that has never been given
+    // one still borrows the cover of the first track inside it that has one, so
+    // the sidebar reads the same as it always did until somebody picks a photo.
     const playlist_cover = (name: string) =>
-        (playlists[name] ?? []).find((track) => cover_of(track))
+        playlist_covers[name] ||
+        cover_of((playlists[name] ?? []).find((track) => cover_of(track)) ?? '') ||
+        ''
 
     // nothing ticked is the list this section has always been: playlists alone
     const shelved = shelves.length ? shelves : (['playlists'] as Shelf[])
@@ -3388,8 +3531,10 @@ export default function App() {
     }
 
     // an album and a playlist can share a name, so a row is only itself with its
-    // kind alongside - which is also what the click and the highlight go by
-    type Row = { kind: Shelf; name: string; count: number; art?: string; pinned: boolean }
+    // kind alongside - which is also what the click and the highlight go by.
+    // 'art' is the picture itself rather than the track it came off: a playlist
+    // may have one of its own, which belongs to no track at all.
+    type Row = { kind: Shelf; name: string; count: number; art: string; pinned: boolean }
 
     const grouped_rows = (kind: Shelf, groups: Map<string, string[]>): Row[] =>
         [...groups]
@@ -3398,7 +3543,7 @@ export default function App() {
                 kind,
                 name,
                 count: tracks.length,
-                art: tracks.find((track) => cover_of(track)),
+                art: cover_of(tracks.find((track) => cover_of(track)) ?? '') ?? '',
                 pinned: false,
             }))
 
@@ -3677,10 +3822,7 @@ export default function App() {
                                                     : undefined
                                             }
                                         >
-                                            {cover(
-                                                row.art ?? '',
-                                                `tile-cover${row.kind === 'artists' ? ' round' : ''}`,
-                                            )}
+                                            {row_cover(row, 'tile-cover', 13)}
                                             <div className='tile-name ellipsis'>
                                                 {row.pinned && (
                                                     <span className='pinned' {...tip('Pinned')}>
@@ -3706,26 +3848,34 @@ export default function App() {
                                                 : undefined
                                         }
                                     >
-                                        {row.pinned ? (
-                                            <span className='pinned' {...tip('Pinned')}>
-                                                <Icon d={ICONS.pin} size={17} fill />
-                                            </span>
-                                        ) : library_view === 'list' ? (
-                                            cover(
-                                                row.art ?? '',
-                                                `playlist-cover${row.kind === 'artists' ? ' round' : ''}`,
-                                            )
+                                        {/* a pin used to stand in place of the
+                                            picture, so pinning a playlist hid
+                                            the cover it was given. it rides
+                                            after the name instead. */}
+                                        {library_view === 'list' ? (
+                                            row_cover(row, 'playlist-cover', 9)
                                         ) : (
-                                            // compact is text only, but a list holding more
-                                            // than playlists has to say which is which
-                                            row.kind !== 'playlists' && (
+                                            // compact carries no covers, so the glyph is the
+                                            // only thing saying which kind a row is
+                                            <span className='kind-ico'>
                                                 <Icon
-                                                    d={row.kind === 'albums' ? ICONS.album : ICONS.artist}
+                                                    d={
+                                                        row.kind === 'albums'
+                                                            ? ICONS.album
+                                                            : row.kind === 'artists'
+                                                              ? ICONS.artist
+                                                              : ICONS.playlist
+                                                    }
                                                     size={15}
                                                 />
-                                            )
+                                            </span>
                                         )}
                                         <span className='ellipsis'>{row.name}</span>
+                                        {row.pinned && (
+                                            <span className='pinned' {...tip('Pinned')}>
+                                                <Icon d={ICONS.pin} size={13} fill />
+                                            </span>
+                                        )}
                                         <span className='nav-count'>{row.count}</span>
                                     </button>
                                 ))
@@ -3907,7 +4057,7 @@ export default function App() {
                                     </button>
 
                                     <span className='avatar-action'>
-                                        {avatar_busy ? (
+                                        {crop_busy ? (
                                             <span className='spinner' />
                                         ) : (
                                             <Icon d={ICONS.upload} size={14} />
@@ -3920,9 +4070,9 @@ export default function App() {
                                             className='avatar-upload-input pill'
                                             type='file'
                                             accept='image/png,image/jpeg'
-                                            disabled={avatar_busy}
+                                            disabled={crop_busy}
                                             aria-label='Change profile picture'
-                                            onChange={pick_avatar}
+                                            onChange={(e) => pick_image(e, { kind: 'avatar' })}
                                         />
                                     </span>
                                 </div>
@@ -3985,7 +4135,10 @@ export default function App() {
                         </>
                     ) : (
                     <>
-                    {current && (
+                    {/* a playlist puts its own cover at the top of the page, and
+                        two hero blocks stacked read as a mistake. what is playing
+                        is still on the bar below and in the rail beside it. */}
+                    {current && !(view === 'playlist' && selection) && (
                         <section className='now-section'>
                             {cover(current, 'hero-cover')}
 
@@ -4026,6 +4179,56 @@ export default function App() {
                     {/* the search and what is playing hold their place; only the
                         listing below them scrolls */}
                     <div className='main-scroll'>
+                        {/* a playlist is the one listing with nothing behind its
+                            name - no album to borrow a sleeve from, no artist -
+                            so it gets a head of its own: the cover it was given,
+                            what it holds, and the two things you do with it */}
+                        {view === 'playlist' && selection && (
+                            <section className='playlist-hero'>
+                                <button
+                                    className='hero-art'
+                                    {...tip('Change cover')}
+                                    onClick={() => open_dialog({ playlist: selection })}
+                                >
+                                    <Cover
+                                        data={playlist_cover(selection)}
+                                        alt={selection}
+                                        className='hero-art-img'
+                                    />
+                                    <span className='hero-art-veil'>
+                                        <Icon d={ICONS.upload} size={18} />
+                                    </span>
+                                </button>
+
+                                <div className='hero-body'>
+                                    <span className='eyebrow'>Playlist</span>
+                                    <h1 className='ellipsis'>{selection}</h1>
+                                    <p className='sub muted'>
+                                        {listed.length} {listed.length === 1 ? 'track' : 'tracks'}
+                                        {listed_span > 0 && ` · ${format_span(listed_span)}`}
+                                    </p>
+
+                                    <div className='hero-actions'>
+                                        <button
+                                            className='pill-btn primary'
+                                            disabled={!listed.length}
+                                            onClick={() => void play_listing()}
+                                        >
+                                            <Icon d={ICONS.play} size={15} />
+                                            Play
+                                        </button>
+                                        <button
+                                            className='pill-btn'
+                                            onClick={() => open_dialog({ playlist: selection })}
+                                        >
+                                            <Icon d={ICONS.rename} size={15} />
+                                            Edit details
+                                        </button>
+                                    </div>
+                                </div>
+                            </section>
+                        )}
+
                         <div className='view-head'>
                             {selection && groups && (
                                 <button
@@ -4036,20 +4239,11 @@ export default function App() {
                                     <Icon d={ICONS.back} size={17} />
                                 </button>
                             )}
-                            {view === 'playlist' && selection ? (
-                                <div className='title-edit'>
-                                    <h2 className='section-title ellipsis'>{view_title}</h2>
-                                    <button
-                                        className='icon-btn tiny edit'
-                                        {...tip('Edit details')}
-                                        onClick={() => open_dialog({ playlist: selection })}
-                                    >
-                                        <Icon d={ICONS.rename} size={14} />
-                                    </button>
-                                </div>
-                            ) : (
-                                <h2 className='section-title ellipsis'>{view_title}</h2>
-                            )}
+                            {/* the playlist's own name is up in the head above,
+                                so this one says what the rows underneath are */}
+                            <h2 className='section-title ellipsis'>
+                                {view === 'playlist' && selection ? 'Tracks' : view_title}
+                            </h2>
                             <span className='muted'>
                                 {groups && !selection
                                     ? `${groups.size} ${view === 'albums' ? 'albums' : 'artists'}`
@@ -4298,12 +4492,16 @@ export default function App() {
                                 {is_favorite(menu.song) ? 'Remove from favorites' : 'Add to favorites'}
                             </button>
 
-                            {view === 'playlist' && selection && (
-                                <button onClick={() => remove_from_playlist(selection, menu.song)}>
-                                    <Icon d={ICONS.minus} size={15} />
-                                    Remove from {selection}
-                                </button>
-                            )}
+                            {view === 'playlist' &&
+                                selection &&
+                                playlists[selection]?.includes(menu.song) && (
+                                    <button
+                                        onClick={() => remove_from_playlist(selection, menu.song)}
+                                    >
+                                        <Icon d={ICONS.minus} size={15} />
+                                        Remove from {selection}
+                                    </button>
+                                )}
 
                             <div className='context-sep' />
                             <div
@@ -4483,6 +4681,31 @@ export default function App() {
                 </div>
             )}
 
+            {shuffle_menu && (
+                <div
+                    className='filter-menu floating shuffle-menu'
+                    style={{ left: shuffle_menu.x, bottom: window.innerHeight - shuffle_menu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className='filter-label'>Shuffle</div>
+                    {SHUFFLES.map((option) => (
+                        <button
+                            key={option.id}
+                            onClick={() => {
+                                set_shuffle_menu(null)
+                                void shuffle_into(option.id)
+                            }}
+                        >
+                            <span className='ellipsis'>
+                                {option.label}
+                                <span className='muted'>{option.hint}</span>
+                            </span>
+                            {shuffle_mode === option.id && <Icon d={ICONS.check} size={14} />}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             {library_menu && (
                 <div
                     className='filter-menu floating'
@@ -4509,7 +4732,56 @@ export default function App() {
                 <div className='overlay' onClick={() => set_dialog(null)}>
                     <div className='dialog' onClick={(e) => e.stopPropagation()}>
                         <h3>Edit details</h3>
-                        {/* the cover comes later, so the name is the whole form for now */}
+
+                        {/* the sleeve leads, centred, because it is the thing
+                            being edited. the way to change it is the picture
+                            itself - it comes up under the pointer rather than
+                            standing beside it as a second control. */}
+                        <div className='cover-pick'>
+                            <span className='cover-mark playlist-art-wrap'>
+                                <Cover
+                                    data={playlist_cover(dialog.playlist)}
+                                    alt={dialog.playlist}
+                                    className='playlist-art'
+                                />
+                                <span className='kind-mark' aria-hidden>
+                                    <Icon d={ICONS.playlist} size={13} />
+                                </span>
+
+                                <span className='cover-veil'>
+                                    {crop_busy ? (
+                                        <span className='spinner' />
+                                    ) : (
+                                        <>
+                                            <Icon d={ICONS.upload} size={20} />
+                                            Change
+                                        </>
+                                    )}
+                                    {/* the picker has to be the element the click
+                                        lands on, so it lies over the whole square */}
+                                    <input
+                                        className='avatar-upload-input'
+                                        type='file'
+                                        accept='image/png,image/jpeg'
+                                        disabled={crop_busy}
+                                        aria-label='Change playlist cover'
+                                        onChange={(e) =>
+                                            pick_image(e, {
+                                                kind: 'playlist',
+                                                name: dialog.playlist,
+                                            })
+                                        }
+                                    />
+                                </span>
+                            </span>
+
+                            <p className='cover-pick-hint'>
+                                {playlist_covers[dialog.playlist]
+                                    ? 'This playlist has a cover of its own.'
+                                    : 'Borrowing the cover of the first track in it.'}
+                            </p>
+                        </div>
+
                         <label className='field'>
                             Name
                             <input
@@ -4542,9 +4814,11 @@ export default function App() {
             {crop_src && (
                 <CropDialog
                     src={crop_src}
-                    busy={avatar_busy}
+                    busy={crop_busy}
+                    shape={crop_for.kind === 'avatar' ? 'round' : 'square'}
+                    title={crop_for.kind === 'avatar' ? 'Crop photo' : 'Crop cover'}
                     on_cancel={() => set_crop_src('')}
-                    on_done={save_avatar}
+                    on_done={save_crop}
                 />
             )}
 
@@ -4575,7 +4849,7 @@ export default function App() {
                                 {/* it says what it does, so it needs no tooltip -
                                     one over a dialog this small lands on the title */}
                                 <div className='avatar-upload' aria-hidden='true'>
-                                    {avatar_busy ? (
+                                    {crop_busy ? (
                                         <span className='spinner' />
                                     ) : (
                                         <>
@@ -4595,9 +4869,9 @@ export default function App() {
                                     className='avatar-upload-input'
                                     type='file'
                                     accept='image/png,image/jpeg'
-                                    disabled={avatar_busy}
+                                    disabled={crop_busy}
                                     aria-label='Change profile picture'
-                                    onChange={pick_avatar}
+                                    onChange={(e) => pick_image(e, { kind: 'avatar' })}
                                 />
                             </div>
 
@@ -4694,10 +4968,32 @@ export default function App() {
                 </div>
 
                 <div className='controls'>
+                    {/* one click steps to the next state, a right-click picks
+                        one outright - or deals the same one again, which is the
+                        only way to re-roll an order without cycling past it */}
                     <button
-                        className={`ctrl${shuffle_on ? ' on' : ''}`}
-                        {...tip(shuffle_on ? 'Turn shuffle off' : 'Shuffle')}
-                        onClick={() => set_shuffle_on(!shuffle_on)}
+                        className={`ctrl${shuffle_mode !== 'off' ? ' on' : ''}${
+                            shuffle_mode === 'all' ? ' wide' : ''
+                        }`}
+                        {...tip(
+                            `${
+                                shuffle_mode === 'off'
+                                    ? 'Shuffle off'
+                                    : shuffle_mode === 'listing'
+                                      ? 'Shuffling this listing'
+                                      : 'Shuffling everything'
+                            } · right-click to pick`,
+                        )}
+                        onClick={() => void shuffle_into(next_shuffle())}
+                        onContextMenu={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            set_shuffle_menu(
+                                shuffle_menu ? null : { x: rect.left, y: rect.top - 10 },
+                            )
+                        }}
                         disabled={!listed.length}
                     >
                         <Icon d={ICONS.shuffle} size={17} />

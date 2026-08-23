@@ -163,7 +163,9 @@ namespace yugen
                static std::vector<std::string> get_playlist(const std::string& playlist_name);
                static bool create_playlist(const std::string& playlist_name);
                static bool delete_playlist(const std::string& playlist_name);
-               
+               static bool set_or_update_playlist_cover(const std::string& playlist_name, const std::string& base64_pic);
+               static std::string get_playlist_cover(const std::string& playlist_name);
+
                static std::vector<std::string> get_playlists();
 
                // liked songs
