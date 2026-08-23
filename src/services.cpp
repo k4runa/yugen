@@ -20,6 +20,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 // posix
@@ -76,6 +77,7 @@ namespace yugen
           const char* env = getenv("LASTFM_API_KEY");
           std::string API_KEY = env ? env : "";
 
+          std::optional<float> cached_vol;
           // the last track handed to publish_activity(), kept so that turning
           // sharing back on can put it up again right away
           std::mutex discord_mtx;
@@ -395,7 +397,6 @@ namespace yugen
           }
 
           const float last_vol = load_volume();
-          std::println("[DEBUG] Loaded volume: {}", last_vol);
 
           const ma_result res = ma_sound_init_from_file(engine, file_path.c_str(), 0, NULL, NULL, &sound);
 
@@ -410,7 +411,7 @@ namespace yugen
           ma_sound_start(&sound);
           sound_initialized = true;
 
-          std::println("[INFO] Playing: {}", file_path);
+          std::println("[INFO] Playing: {}", file_path.substr(file_path.find_last_of('/') + 1));
 
           TrackInfo track {.title = title, .artist = artist, .album = album, .file_path = file_path};
 
@@ -625,12 +626,20 @@ namespace yugen
 
      float SoundManager::load_volume()
      {
+          if(cached_vol.has_value()) {
+               return cached_vol.value();
+          }
+
           std::string path = data_dir() + "/vol.txt";
           if(fs::exists(path))
           {
                std::ifstream f(path);
                float vol;
                f >> vol;
+               if(f.fail()) {
+                    return 1.0f;
+               }
+               cached_vol = vol;
                return vol;
           }
 
