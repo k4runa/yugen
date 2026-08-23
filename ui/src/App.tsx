@@ -204,11 +204,11 @@ const SORTS: { id: Sort; label: string }[] = [
 // how many of a thing a shelf on the library page holds
 const SHELF = 10
 
-// how many suggestions a full shelf holds, and how deep the pass is allowed to
-// dig for them: last.fm rarely has a picture on the similar list itself, so
-// most of what is found costs one more request before it can be shown
+// how many suggestions a full shelf holds. a pass digs four times as deep as
+// that before it gives up: last.fm rarely has a picture on the similar list
+// itself, so most of what is found costs one more request before it can be
+// shown, and the ones with nothing behind them are dropped.
 const SUGGESTIONS = 60
-const CANDIDATES = SUGGESTIONS * 4
 
 // one artist is allowed this many places on the shelf. last.fm answers a seed
 // with a lot of the same name, so without a ceiling a pass reads as one back
@@ -352,10 +352,19 @@ const WIDER_SHARE = 0.4
 // what is on screen before 'load more'
 const SUGGESTION_PAGE = 20
 
+// the shelf at the foot of a listing is a list rather than a wall of covers, so
+// it holds fewer and uncovers them a handful at a time
+const NEARBY = 30
+const NEARBY_PAGE = 10
+
 // every call runs on a thread of its own on the far side and ends in a request
 // to last.fm, which asks for about five a second: the work is walked a few at a
 // time rather than all at once, and this is the width of that walk
 const LANES = 4
+
+// what a pass was asked for: a shelf being filled, the same shelf asked again
+// for different names, or more piled under what is already on it
+type Mood = 'new' | 'again' | 'more'
 
 type Suggestion = {
     // artist and title folded together: what tells two answers apart, and what
@@ -1262,9 +1271,11 @@ export default function App() {
     const [shuffled, set_shuffled] = useState<string[] | null>(null)
     const [shuffle_menu, set_shuffle_menu] = useState<{ x: number; y: number } | null>(null)
 
-    // name -> whatever lrclib returned for it, '' included: a track with no lyrics
-    // should be asked about once and then left alone
-    const [lyrics, set_lyrics] = useState<Record<string, string>>({})
+    // the sheet for one track: whatever lrclib returned for it, '' included. it
+    // is not a cache - lyrics.json on the far side is - so it holds the track it
+    // belongs to, and a sheet whose track is no longer the one playing is a
+    // sheet that has not come back yet.
+    const [sheet_for, set_sheet_for] = useState<{ song: string; text: string } | null>(null)
 
     const [menu, set_menu] = useState<Menu | null>(null)
     const [submenu, set_submenu] = useState(false)
@@ -1369,6 +1380,49 @@ export default function App() {
         ),
     )
     const [suggestion_menu, set_suggestion_menu] = useState(false)
+
+    // the same shelf again, at the foot of a playlist or the liked songs, drawn
+    // from what is in that listing. it belongs to the listing rather than to
+    // the session, so nearby_for is what it is currently holding.
+    const [nearby, set_nearby] = useState<Suggestion[]>([])
+    const [nearby_busy, set_nearby_busy] = useState(false)
+    const [nearby_shown, set_nearby_shown] = useState(NEARBY_PAGE)
+    const nearby_run = useRef(0)
+    // which listing's shelf is the one on screen
+    const nearby_for = useRef('')
+
+    /*
+     * What every listing's shelf is holding, kept behind the one on screen.
+     * A pass is a round trip per seed, and walking out of a playlist and back
+     * into it does not change what is in the playlist - so it should not cost
+     * another one, and should not answer with the same names as if they were
+     * new. Each listing keeps its tracks, how far down it had been uncovered,
+     * and what it has already offered.
+     */
+    const nearby_cache = useRef(
+        new Map<string, { tracks: Suggestion[]; shown: number; served: Set<string> }>(),
+    )
+
+    const nearby_memory = (key: string) => {
+        const held = nearby_cache.current.get(key)
+
+        if (held) return held
+
+        const fresh = { tracks: [] as Suggestion[], shown: NEARBY_PAGE, served: new Set<string>() }
+        nearby_cache.current.set(key, fresh)
+
+        return fresh
+    }
+
+    // which listing the shelf belongs to, and the only two that get one: a
+    // playlist and the liked songs are hand-picked, so they are the two
+    // listings where 'what else is like this' means anything
+    const nearby_key =
+        view === 'playlist' && selection
+            ? `playlist:${selection}`
+            : view === 'liked'
+              ? 'liked'
+              : ''
     // suggestions being fetched, the ones that came in, and the ones youtube had
     // nothing for. all keyed by the suggestion, so a card answers for itself.
     // 'fetched' is kept because a download is named after the search result
@@ -1485,15 +1539,19 @@ export default function App() {
 
     const ambient = useCrossfade(aura_on ? current_cover : undefined)
 
+    // asked for every track that comes up, and no longer asked once per session:
+    // the backend keeps lyrics.json and answers off disk, which is the copy that
+    // outlives the window
     useEffect(() => {
-        if (!current || current in lyrics) return
+        if (!current) return
 
+        const song = current
         let cancelled = false
 
         bridge()
-            .get_lyrics(title_of(current), artist_of(current))
-            .then((raw) => !cancelled && set_lyrics((prev) => ({ ...prev, [current]: raw ?? '' })))
-            .catch(() => !cancelled && set_lyrics((prev) => ({ ...prev, [current]: '' })))
+            .get_lyrics(title_of(song), artist_of(song))
+            .then((raw) => !cancelled && set_sheet_for({ song, text: raw ?? '' }))
+            .catch(() => !cancelled && set_sheet_for({ song, text: '' }))
 
         return () => {
             cancelled = true
@@ -2301,16 +2359,108 @@ export default function App() {
     }
 
     /*
-     * A pass, in one of three moods.
+     * One pass, wherever it was asked for.
      *
-     * 'new' is the shelf being filled for the first time. 'again' is the pass
-     * button: same kind of thing, deliberately not the same things - it draws
-     * new seeds and refuses everything the shelf has already offered, so what
-     * comes back is a different corner of the same taste. 'more' is the load
-     * button once the cards run out: another dig, added under what is there
-     * rather than replacing it.
+     * The seeds go out one at a time - that is the shape of the last.fm call
+     * behind them - and what comes back is gathered into a single list, thinned
+     * to what is not already on disk, held back from repeating what the shelf
+     * has already offered, spread so no one artist takes it over, and finally
+     * filled with pictures until there are enough to show.
+     *
+     * 'skip' is the shelf's memory of what it has served. It is cleared here
+     * rather than by the caller: only this side knows whether holding those
+     * back would have left the shelf half empty, and a repeat beats a gap.
      */
-    async function load_similar(mood: 'new' | 'again' | 'more' = 'new') {
+    async function gather(
+        seeds: string[],
+        wanted: number,
+        skip: Set<string>,
+        alive: () => boolean,
+    ): Promise<Suggestion[]> {
+        const dir = await music_dir()
+
+        const answers = await in_lanes(seeds, LANES, (name) =>
+            bridge()
+                .get_similar(dir + name, between(PER_SEED))
+                .then(as_similar)
+                // no api key, no network, a track last.fm has never heard of:
+                // all of them are a seed with nothing to say, and the pass
+                // carries on with the ones that do
+                .catch(() => [] as SimilarTrack[]),
+        )
+
+        if (!alive()) return []
+
+        // the seeds are how the list is gathered, not how it is read: what comes
+        // back is one list, and the same track answering for two seeds is still
+        // one suggestion
+        const seen = new Set<string>()
+        const found: Suggestion[] = []
+
+        for (const answer of answers) {
+            for (const track of answer ?? []) {
+                // parsed text rather than a typed answer: every field is
+                // whatever last.fm happened to put there, including nothing
+                const title = String(track?.name ?? '').trim()
+                const artist = String(track?.artist ?? '').trim()
+
+                if (!title) continue
+
+                const key = fold(artist + title)
+                if (seen.has(key) || library_keys.has(key)) continue
+
+                seen.add(key)
+                found.push({
+                    key,
+                    title,
+                    artist,
+                    image: picture(String(track?.image ?? '')),
+                    // it is an order, not a label, and last.fm has sent it as
+                    // text before now
+                    match: Number(track?.match) || 0,
+                })
+            }
+        }
+
+        const unseen = found.filter((track) => !skip.has(track.key))
+        const pool = unseen.length >= wanted ? unseen : found
+
+        if (pool === found) skip.clear()
+
+        // closest first, no artist taking over, and only as deep as the shelf
+        // could ever need
+        const candidates = spread_artists(pool.sort((a, b) => b.match - a.match)).slice(
+            0,
+            wanted * 4,
+        )
+
+        const shown = await with_pictures(candidates, wanted, alive)
+
+        for (const track of shown) skip.add(track.key)
+
+        return shown
+    }
+
+    // 'more' lands under what is on screen, and only the names that are not on
+    // it already; the other two moods replace the shelf outright
+    const settle = (mood: Mood, shown: Suggestion[]) => (current: Suggestion[]) => {
+        if (mood !== 'more') return shown
+
+        const here = new Set(current.map((track) => track.key))
+
+        return [...current, ...shown.filter((track) => !here.has(track.key))]
+    }
+
+    /*
+     * The library's own shelf, in one of three moods.
+     *
+     * 'new' is it being filled for the first time. 'again' is the pass button:
+     * same kind of thing, deliberately not the same things - it draws new seeds
+     * and refuses everything the shelf has already offered, so what comes back
+     * is a different corner of the same taste. 'more' is the load button once
+     * the cards run out: another dig, added under what is there.
+     */
+    async function load_similar(mood: Mood = 'new') {
         const { marked, rest } = seed_pools
         if (!marked.length && !rest.length) return
         if (similar_busy) return
@@ -2323,98 +2473,83 @@ export default function App() {
         // ones that lean on it
         if (mood === 'new') served.current.clear()
 
-        // the folder before the spinner, and not the other way around: the very
-        // first pass is kicked off by the page opening, and react wants nothing
-        // set on the way through an effect
-        const dir = await music_dir()
-
         set_similar_busy(true)
         if (mood !== 'more') set_cards_shown(SUGGESTION_PAGE)
 
         try {
-            const picked = pick_seeds()
-
-            const answers = await in_lanes(picked, LANES, (name) =>
-                bridge()
-                    .get_similar(dir + name, between(PER_SEED))
-                    .then(as_similar)
-                    // no api key, no network, a track last.fm has never heard
-                    // of: all of them are a seed with nothing to say, and the
-                    // pass carries on with the ones that do
-                    .catch(() => [] as SimilarTrack[]),
+            const shown = await gather(
+                pick_seeds(),
+                SUGGESTIONS,
+                served.current,
+                () => run === similar_run.current,
             )
 
             // it is just not the pass on screen any more
             if (run !== similar_run.current) return
 
-            // the seeds are how the list is gathered, not how it is read: what
-            // comes back is one list, and the same track answering for two
-            // seeds is still one suggestion
-            const seen = new Set<string>()
-            const found: Suggestion[] = []
-
-            for (const answer of answers) {
-                for (const track of answer ?? []) {
-                    // parsed text rather than a typed answer: every field is
-                    // whatever last.fm happened to put there, including nothing
-                    const title = String(track?.name ?? '').trim()
-                    const artist = String(track?.artist ?? '').trim()
-
-                    if (!title) continue
-
-                    const key = fold(artist + title)
-                    if (seen.has(key) || library_keys.has(key)) continue
-
-                    seen.add(key)
-                    found.push({
-                        key,
-                        title,
-                        artist,
-                        image: picture(String(track?.image ?? '')),
-                        // it is an order, not a label, and last.fm has sent
-                        // it as text before now
-                        match: Number(track?.match) || 0,
-                    })
-                }
-            }
-
-            // what the shelf has already been shown is held back - unless doing
-            // so would leave it half empty, in which case a repeat beats a gap
-            const unseen = found.filter((track) => !served.current.has(track.key))
-            const pool = unseen.length >= SUGGESTIONS ? unseen : found
-
-            if (pool === found) served.current.clear()
-
-            // closest first, no artist taking over, and only as deep as the
-            // shelf could ever need
-            const candidates = spread_artists(
-                pool.sort((a, b) => b.match - a.match),
-            ).slice(0, CANDIDATES)
-
-            const shown = await with_pictures(
-                candidates,
-                SUGGESTIONS,
-                () => run === similar_run.current,
-            )
-
-            if (run !== similar_run.current) return
-
-            for (const track of shown) served.current.add(track.key)
-
-            // 'more' is added under what is on screen, and only the names that
-            // are not on it already
-            set_similar((current) => {
-                if (mood !== 'more') return shown
-
-                const here = new Set(current.map((track) => track.key))
-
-                return [...current, ...shown.filter((track) => !here.has(track.key))]
-            })
+            set_similar(settle(mood, shown))
 
             if (mood === 'more') set_cards_shown((count) => count + SUGGESTION_PAGE)
         } finally {
             if (run === similar_run.current) set_similar_busy(false)
         }
+    }
+
+    /*
+     * The shelf at the foot of a listing. Same pass, different seeds: what is
+     * in the playlist you are standing in, or your liked songs, rather than
+     * everything the library has to draw on. It belongs to that listing and is
+     * thrown away when you leave it.
+     */
+    async function load_nearby(mood: Mood = 'new') {
+        const key = nearby_key
+        if (!key || !listed.length || nearby_busy) return
+
+        const run = ++nearby_run.current
+        const memory = nearby_memory(key)
+
+        if (mood === 'new') memory.served.clear()
+
+        set_nearby_busy(true)
+
+        if (mood !== 'more') {
+            memory.shown = NEARBY_PAGE
+            set_nearby_shown(NEARBY_PAGE)
+        }
+
+        try {
+            const shown = await gather(
+                sample(listed, between(SEEDS)),
+                NEARBY,
+                memory.served,
+                () => run === nearby_run.current && nearby_for.current === key,
+            )
+
+            if (run !== nearby_run.current) return
+
+            memory.tracks = settle(mood, shown)(memory.tracks)
+            set_nearby(memory.tracks)
+
+            if (mood === 'more') {
+                memory.shown += NEARBY_PAGE
+                set_nearby_shown(memory.shown)
+            }
+        } finally {
+            if (run === nearby_run.current) set_nearby_busy(false)
+        }
+    }
+
+    function load_more_nearby() {
+        if (nearby_shown < nearby.length) {
+            const memory = nearby_memory(nearby_key)
+
+            memory.shown = nearby_shown + NEARBY_PAGE
+            set_nearby_shown(memory.shown)
+
+            return
+        }
+
+        void load_nearby('more')
     }
 
     // the load button: more of what is already here first, and once that runs
@@ -2456,6 +2591,12 @@ export default function App() {
         const here = library_keys.has(track.key) || fetched.includes(track.key)
         if (getting.includes(track.key) || here) return
 
+        // where it was asked for is where it belongs: a suggestion taken from
+        // the foot of a playlist joins that playlist, and one taken from the
+        // liked songs is liked. read before the download rather than after -
+        // the page can be somewhere else by the time yt-dlp is done.
+        const home = nearby_key
+
         set_getting((busy) => [...busy, track.key])
         set_missing((gone) => gone.filter((key) => key !== track.key))
 
@@ -2473,7 +2614,18 @@ export default function App() {
             await bridge().download_yt(best.ref, await music_dir())
 
             set_fetched((done) => [...done, track.key])
-            await fetch_songs()
+
+            // download_with_ytdlp names the file after the search result, id and
+            // all, so the id is what says which of these is the one that landed
+            const { names } = await fetch_songs()
+            const landed = names.find((name) => library_mark(name).id === best.ref)
+
+            if (landed && home.startsWith('playlist:')) {
+                await add_to_playlist(home.slice('playlist:'.length), landed)
+            } else if (landed && home === 'liked') {
+                await bridge().like_song(landed)
+            }
+
             await sync_liked()
         } catch {
             set_missing((gone) => [...gone, track.key])
@@ -2508,6 +2660,65 @@ export default function App() {
               : view === 'liked'
                 ? [...liked_songs].sort(by_sort)
                 : [...songs].sort(by_sort)
+
+    /*
+     * Sorting by album put the albums' tracks next to each other and left it at
+     * that, so an artist read as one long run of songs with the album repeated
+     * down a column. Sorted by album, a listing is the albums themselves - the
+     * same cards the Albums page deals, and a click on one opens it.
+     *
+     * An album's own page is the one listing this cannot mean anything on: it
+     * is already that album, and grouping it by album would be a page holding a
+     * single card of itself. Everywhere else it holds, however few albums are
+     * in it - a playlist of two tracks off the same record is still that record.
+     */
+    const album_runs = useMemo(() => {
+        if (sort !== 'album') return null
+        if (view === 'albums' && selection) return null
+
+        const runs = new Map<string, string[]>()
+
+        for (const name of listed) {
+            const key = album_of(name) || 'Unknown album'
+            const held = runs.get(key)
+
+            if (held) held.push(name)
+            else runs.set(key, [name])
+        }
+
+        return runs.size ? runs : null
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- album_of reads metadata_map
+    }, [sort, view, selection, listed, metadata_map])
+
+    /*
+     * Which shelf is on screen. Walking into a listing that already has one
+     * puts it back rather than asking for another - what is in the playlist has
+     * not changed, so neither would the answer. Only a listing with no shelf yet
+     * costs a pass, and an empty one costs nothing at all: it is left unclaimed
+     * so that the first track added to it still gets a shelf.
+     */
+    useEffect(() => {
+        if (!nearby_key || nearby_for.current === nearby_key) return
+
+        const held = nearby_cache.current.get(nearby_key)
+
+        if (held) {
+            nearby_for.current = nearby_key
+            set_nearby(held.tracks)
+            set_nearby_shown(held.shown)
+
+            return
+        }
+
+        set_nearby([])
+        set_nearby_shown(NEARBY_PAGE)
+
+        if (!listed.length) return
+
+        nearby_for.current = nearby_key
+        void Promise.resolve().then(() => load_nearby())
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- the cue is the listing, and load_nearby reads it when it runs
+    }, [nearby_key, listed.length])
 
     // anything that is a list of tracks is arranged by the menu: home, an album
     // or an artist opened up, a playlist, the liked songs. the album and artist
@@ -3155,7 +3366,11 @@ export default function App() {
     }
 
     // a group card: cover comes from the first track that actually has one
-    function group_cards(entries: Map<string, string[]>, round?: boolean) {
+    function group_cards(
+        entries: Map<string, string[]>,
+        round?: boolean,
+        open?: (name: string) => void,
+    ) {
         return (
             <section className='card-row'>
                 {[...entries].map(([name, tracks], i) => (
@@ -3163,7 +3378,7 @@ export default function App() {
                         key={name}
                         className='album'
                         style={{ '--i': i } as React.CSSProperties}
-                        onClick={() => set_selection(name)}
+                        onClick={() => (open ? open(name) : set_selection(name))}
                     >
                         {cover(
                             tracks.find((track) => cover_of(track)) ?? tracks[0],
@@ -3174,6 +3389,57 @@ export default function App() {
                     </div>
                 ))}
             </section>
+        )
+    }
+
+    /*
+     * The same groups the Albums page deals, read the way the View menu asks
+     * for. Sorted by album a listing is albums rather than tracks, and the
+     * menu still has to mean something: covers, a plain list, or one line each.
+     */
+    function group_block(entries: Map<string, string[]>, open: (name: string) => void) {
+        if (layout === 'grid') return group_cards(entries, false, open)
+
+        const art = (tracks: string[]) => tracks.find((track) => cover_of(track)) ?? tracks[0]
+
+        if (layout === 'compact') {
+            return (
+                <div className='track-rows'>
+                    {[...entries].map(([name, tracks], i) => (
+                        <div key={name} className='track' onClick={() => open(name)}>
+                            <span className='track-index'>{i + 1}</span>
+                            <div className='track-meta'>
+                                <div className='name ellipsis'>{name}</div>
+                                <div className='muted ellipsis'>
+                                    {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )
+        }
+
+        return (
+            <div className='group-list'>
+                {[...entries].map(([name, tracks]) => (
+                    <div key={name} className='row' onClick={() => open(name)}>
+                        {cover(art(tracks), 'row-cover')}
+
+                        <div className='track-meta'>
+                            <div className='name ellipsis'>{name}</div>
+                            <div className='muted ellipsis'>{artist_of(tracks[0])}</div>
+                        </div>
+
+                        <div className='muted row-count'>
+                            {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
+                        </div>
+                        <div className='muted row-length'>
+                            {format_span(tracks.reduce((sum, name) => sum + length_of(name), 0))}
+                        </div>
+                    </div>
+                ))}
+            </div>
         )
     }
 
@@ -3501,6 +3767,79 @@ export default function App() {
         )
     }
 
+    /*
+     * The shelf at the foot of a listing. It is the library's shelf stripped to
+     * what a listing needs: no view menu, because a list is the only way a
+     * short shelf under a list of tracks reads, and no page of covers to page
+     * through - just rows, and the button that asks for more.
+     */
+    function nearby_shelf() {
+        const on_screen = nearby.slice(0, nearby_shown)
+        const named = nearby_key.startsWith('playlist:')
+            ? nearby_key.slice('playlist:'.length)
+            : 'your liked songs'
+
+        return (
+            <section className='block discover'>
+                <div className='shelf-head'>
+                    <span className='eyebrow'>More like this</span>
+                    <span className='muted'>
+                        {nearby_busy && !nearby.length
+                            ? 'asking around...'
+                            : `based on ${named}`}
+                    </span>
+
+                    <div className='shelf-tools'>
+                        <button
+                            type='button'
+                            className='pill-btn pass'
+                            disabled={nearby_busy}
+                            {...tip('Ask again, for different tracks')}
+                            onClick={() => void load_nearby('again')}
+                        >
+                            <Icon d={ICONS.refresh} size={13} />
+                            Another pass
+                        </button>
+                    </div>
+                </div>
+
+                {nearby.length ? (
+                    <>
+                        <section className='suggestion-list'>
+                            {on_screen.map((track) => suggestion_row(track))}
+                        </section>
+
+                        <button
+                            className='pill-btn more-seeds'
+                            disabled={nearby_busy}
+                            onClick={load_more_nearby}
+                        >
+                            {nearby_busy && nearby_shown >= nearby.length
+                                ? 'Looking...'
+                                : 'Load more'}
+                        </button>
+                    </>
+                ) : nearby_busy ? (
+                    <section className='suggestion-list'>
+                        {Array.from({ length: 4 }, (_, i) => (
+                            <div key={i} className='sugg-row skeleton'>
+                                <div className='row-cover placeholder' />
+                                <div className='row-main'>
+                                    <div className='bar' />
+                                    <div className='bar short' />
+                                </div>
+                            </div>
+                        ))}
+                    </section>
+                ) : (
+                    <p className='empty'>
+                        Nothing came back this time. Try another pass.
+                    </p>
+                )}
+            </section>
+        )
+    }
+
     // pinned first in the order they were pinned, the rest alphabetical
     const playlist_names = Object.keys(playlists).sort((a, b) => {
         const rank = (name: string) => (pins.includes(name) ? pins.indexOf(name) : pins.length)
@@ -3637,9 +3976,10 @@ export default function App() {
     const flip = !!menu && menu.x > window.innerWidth / 2
     const next_theme: Theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
 
-    const sheet = current ? lyrics[current] : undefined
-    // asked for but not answered yet: the cache holds '' once a track comes back empty
-    const awaiting_lyrics = !!current && !(current in lyrics)
+    // a sheet is only this track's while it names this track: anything else is
+    // the last one, still on screen because the answer for this one is not in yet
+    const sheet = sheet_for?.song === current ? sheet_for.text : undefined
+    const awaiting_lyrics = !!current && sheet === undefined
     const timed = useMemo(() => (sheet ? parse_lyrics(sheet) : null), [sheet])
 
     // the bar and the clock are written straight into these two nodes every frame.
@@ -4327,6 +4667,11 @@ export default function App() {
                         ) : listed.length ? (
                             overview ? (
                                 library_page()
+                            ) : album_runs ? (
+                                group_block(album_runs, (name) => {
+                                    set_view('albums')
+                                    set_selection(name)
+                                })
                             ) : layout === 'list' ? (
                                 track_list(listed)
                             ) : layout === 'compact' ? (
@@ -4353,6 +4698,10 @@ export default function App() {
                             with nothing to ask about, and a shelf that can only
                             be empty is not worth the room. */}
                         {has_more && suggestions()}
+
+                        {/* the same idea one listing down: what else is like
+                            what is in this playlist, or in your liked songs */}
+                        {!!nearby_key && listed.length > 0 && nearby_shelf()}
                     </div>
 
                     </>
