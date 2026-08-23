@@ -46,11 +46,32 @@
 
 namespace fs = std::filesystem;
 
+/*
+ * Tracing for the caches below, compiled out of a release build entirely -
+ * DEBUG is only defined on a Debug configuration, and then DBG expands to
+ * nothing at all rather than to a call nobody reads. What it is for is the
+ * question none of these caches can answer from the outside: whether an answer
+ * came off disk or off the network. The [INFO] lines around them are printed by
+ * the saucer bindings before the call is made, so they say a question was asked
+ * and nothing about where it was answered.
+ *
+ * ##__VA_ARGS__ is a gnu extension, and what lets DBG take a bare format string
+ * with no arguments after it.
+ */
+#ifdef DEBUG
+     #define DBG(fmt, ...) std::println("[DEBUG] " fmt, ##__VA_ARGS__)
+#else
+     #define DBG(fmt, ...)
+#endif
+
 namespace yugen
 {
      namespace
      {
           constexpr const char* PLAYLISTS_FILE   = "/playlists.json";
+          // every sheet lrclib has ever answered with, so the second run of the
+          // player is not the first one again
+          constexpr const char* LYRICS_FILE      = "/lyrics.json";
           // the one grey star last.fm answers with for everything it has no
           // picture of, recognised by the hash in its url so that a suggestion
           // carrying nothing is handed over as carrying nothing
@@ -77,7 +98,16 @@ namespace yugen
           const char* env = getenv("LASTFM_API_KEY");
           std::string API_KEY = env ? env : "";
 
+          // the volume as it was last set, so the poll behind the slider does not
+          // read vol.txt off the disk several times a second
           std::optional<float> cached_vol;
+
+          // full path -> the tags read off that file. a scan asks about every
+          // track in the folder and taglib opens the file to answer, so this is
+          // what keeps a rescan from paying for the whole library twice. it is
+          // not mirrored anywhere: the files themselves are the copy that lasts.
+          std::unordered_map<std::string, std::vector<std::string>> cached_metadata;
+
           // the last track handed to publish_activity(), kept so that turning
           // sharing back on can put it up again right away
           std::mutex discord_mtx;
@@ -91,12 +121,35 @@ namespace yugen
           // puts it back up instead of coming back to a switch that turned itself off
           std::atomic<bool> share_activity_paused = false;
 
+          /*
+           * Every cache here is read and written from more than one thread -
+           * each binding runs its call on its own - so each one is behind a lock
+           * of its own rather than one lock over all of them: a scan reading
+           * tags has nothing to wait for behind a lyric sheet being written.
+           *
+           * cached_vol is the exception and needs none. It is a scalar written
+           * whole, and a torn read of it is not a thing that can happen.
+           */
+
+          // over cached_metadata, which is declared further up with the rest of
+          // what is only ever held in memory
+          std::mutex metadata_mtx;
+
           // file name -> cover url, mirrored to covers.json. a miss is stored as
           // an empty string, so a track without artwork is looked up once and
           // never asked about again
           std::mutex cover_mtx;
-          json cover_cache;
+          json cover_cache;          
           bool cover_cache_loaded = false;
+
+          // the same arrangement for lyrics, mirrored to lyrics.json: a track
+          // lrclib has nothing for is stored as an empty sheet, which is an
+          // answer and is why the miss is worth keeping. the file is read once
+          // per run and rewritten whole whenever a sheet is added - the loaded
+          // flag is what says which of those has already happened.
+          std::mutex lyrics_mtx;
+          json lyrics_cache;
+          bool lyrics_cache_loaded = false;
 
           // lookups already in flight, so two publishes of the same track do not
           // both go out to the network
@@ -245,11 +298,96 @@ namespace yugen
           return response;
      }
 
-     // Asks lrclib for every sheet matching the track and picks one out of the
-     // results. The title and artist go through curl's escaping first, since a
-     // track name is free text and lands straight in a query string.
+     /*
+      * lyrics.json into memory, once. Every entry is read back at the first
+      * question rather than a file being opened per track, and the flag is set
+      * before the read rather than after it: a file that is not there, will not
+      * open, or does not parse leaves an empty cache that works, and asking
+      * again would only fail the same way.
+      *
+      * allow_exceptions is off - that is the third argument - because this runs
+      * on a binding's own thread, where a throw is not an error that reaches
+      * anyone but the one that takes the process down with it. A half-written
+      * file comes back discarded instead, and is treated as no file at all.
+      *
+      * The caller holds lyrics_mtx. This touches all three globals and takes no
+      * lock of its own.
+      */
+     static void load_lyrics_cache()
+     {
+          if(lyrics_cache_loaded) return;
+
+          lyrics_cache_loaded = true;
+          lyrics_cache = json::object();
+
+          const std::string path = data_dir() + LYRICS_FILE;
+
+          if(!fs::exists(path)) return;
+          
+          std::ifstream f(path);
+          if(!f.is_open()) return;
+
+          const auto data = json::parse(f, nullptr, false);
+          if(!data.is_discarded() && data.is_object()) lyrics_cache = data;
+     }
+
+     /*
+      * A sheet already known for this track, if any. The outer optional says
+      * whether the track has been looked up at all, the string whether anything
+      * was found - so a track lrclib has nothing for is an empty string here and
+      * never goes out to the network a second time.
+      */
+     static std::optional<std::string> cached_lyrics(const std::string& key)
+     {
+          std::lock_guard<std::mutex> lock(lyrics_mtx);
+          
+          load_lyrics_cache();
+          
+          if(!lyrics_cache.contains(key)) return std::nullopt;
+
+          return lyrics_cache.at(key).get<std::string>();
+     }
+
+     // What came back, written through to disk on the spot. The whole file goes
+     // out again rather than the one entry: it is json, there is no appending to
+     // it, and a sheet is only added when a track is played for the first time.
+     static void store_lyrics(const std::string& key, const std::string url)
+     {
+          std::lock_guard<std::mutex> lk(lyrics_mtx);
+
+          load_lyrics_cache();
+
+          lyrics_cache[key] = url;
+
+          std::ofstream out(data_dir() + LYRICS_FILE);
+          if(out.is_open()) out << lyrics_cache.dump(4);
+
+     }
+
+     /*
+      * Asks lrclib for every sheet matching the track and picks one out of the
+      * results. The title and artist go through curl's escaping first, since a
+      * track name is free text and lands straight in a query string.
+      *
+      * Nothing here is asked twice. Whatever the search ends up with - a timed
+      * sheet, a plain one, or nothing - is stored under the track before it is
+      * returned, and the next play answers from lyrics.json without a request.
+      * The one thing not stored is a failure: no curl handle and an empty
+      * response are the network being unreachable rather than lrclib saying it
+      * has nothing, and remembering those would make the miss permanent.
+      */
      std::string Core::get_lyrics(const std::string& title, const std::string& artist)
      {
+          // artist first, so the file reads as one artist's tracks together
+          const std::string cached_key = artist + " - " + title;
+
+          auto cached = yugen::cached_lyrics(cached_key);
+          
+          if(cached.has_value()) {
+               DBG("Loaded lyrics from cache for {}", cached_key);
+               return cached.value();
+          }
+
           CURL* curl = curl_easy_init();
           if(!curl) return "";
 
@@ -270,14 +408,19 @@ namespace yugen
           if(response.empty()) return "";
 
           const auto data = json::parse(response, nullptr, false);
-          if(data.is_discarded() || data.empty()) return "";
-
+          if(data.is_discarded() || data.empty()) {
+               store_lyrics(cached_key, "");
+               return "";
+          }
+          
           // the search returns every match and only some of them carry timings, so
           // a timed sheet anywhere in the list beats the closest name match
           for(const auto& hit : data)
           {
                if(hit.contains("syncedLyrics") && !hit["syncedLyrics"].is_null())
                {
+                    store_lyrics(cached_key, hit["syncedLyrics"].get<std::string>());
+                    DBG("Added lyrics for {} to cache", cached_key);
                     return hit["syncedLyrics"].get<std::string>();
                }
           }
@@ -287,10 +430,13 @@ namespace yugen
           {
                if(hit.contains("plainLyrics") && !hit["plainLyrics"].is_null())
                {
+                    store_lyrics(cached_key, hit["plainLyrics"].get<std::string>());
+                    DBG("Added lyrics for {} to cache", cached_key);
                     return hit["plainLyrics"].get<std::string>();
                }
           }
 
+          store_lyrics(cached_key, "");
           return "";
      }
 
@@ -423,7 +569,12 @@ namespace yugen
                const auto meta = get_metadata(file_path);
                if(meta.size() >= 3)
                {
-                    track = {.title = meta[0], .artist = meta[1], .album = meta[2], .file_path = file_path};
+                    track = {
+                         .title = meta[0],
+                         .artist = meta[1],
+                         .album = meta[2],
+                         .file_path = file_path
+                    };
                }
           }
 
@@ -585,10 +736,41 @@ namespace yugen
 
      // Title, artist, album, length in seconds and the added timestamp, in that
      // order - the ui unpacks it positionally. Empty when the file has no tags.
+     //
+     // Answered from memory after the first time. A scan asks about every track
+     // in the folder and taglib opens the file to answer each one, so a rescan
+     // over a library that has not changed used to cost the whole read again.
+     // A file with no tags is remembered too, as the empty answer it gave: it is
+     // still an answer, and re-opening the file cannot turn it into another one.
+     //
+     // The cache is keyed by full path and nothing clears it, so tags edited
+     // while the player is running are not picked up until it restarts.
      std::vector<std::string> SoundManager::get_metadata(const std::string& file_path)
      {
+          // the tail of the path, for the tracing below: a full path per track
+          // is most of a line and none of it is the part being said
+          const std::string song_name = file_path.substr(file_path.find_last_of('/') + 1);
+
+          // the lock is held over the lookup rather than the whole function: the
+          // taglib read below is the slow part and nothing in the map is needed
+          // while it runs
+          {
+               std::lock_guard<std::mutex> lk(metadata_mtx);
+               if(cached_metadata.find(file_path) != cached_metadata.end()) 
+               {
+                    DBG("Get metadata for {} from cache", song_name);
+                    return cached_metadata.at(file_path);
+               }
+          }
+
           TagLib::FileRef f(file_path.c_str());
-          if(f.isNull() || !f.tag()) return {};
+          if(f.isNull() || !f.tag()) {
+               std::lock_guard<std::mutex> lk(metadata_mtx);
+               cached_metadata[file_path] = {};
+               DBG("Failed to get metadata due to null file: {}", file_path);
+               DBG("Null file added to cache: {}", file_path);
+               return {};
+          }
 
           TagLib::Tag* tag = f.tag();
 
@@ -605,7 +787,11 @@ namespace yugen
 
           // unix seconds, what "recently added" sorts on
           out_vec.emplace_back(std::to_string(added_time(file_path)));
-
+          {
+               std::lock_guard<std::mutex> lk(metadata_mtx);
+               cached_metadata[file_path] = out_vec;
+          }
+          DBG("Added metadata for {} to cache", song_name);
           return out_vec;
      }
 
@@ -616,17 +802,29 @@ namespace yugen
           fs::remove(file_path);
      }
 
+     // The slider writes here and the poll behind it reads load_volume(), so the
+     // two are kept in step through cached_vol: vol.txt is written for the next
+     // launch rather than to be read back during this one.
      void SoundManager::set_volume(float volume)
      {
-          if(sound_initialized) ma_sound_set_volume(&sound, volume);
+          if(sound_initialized) {
+               cached_vol = volume;
+               DBG("Updated cached volume to {}", volume);
+               ma_sound_set_volume(&sound, volume);
+          }
 
           std::ofstream out(data_dir() + "/vol.txt");
           out << volume;
      }
 
+     // What the player should come up at, and what the slider reads back while it
+     // is running. The file is only ever touched on the first ask of a run -
+     // after that set_volume() has already put the answer in cached_vol, and a
+     // slider being dragged would otherwise open vol.txt on every frame.
      float SoundManager::load_volume()
      {
           if(cached_vol.has_value()) {
+               DBG("Loaded volume from cache: {}", cached_vol.value());
                return cached_vol.value();
           }
 
@@ -640,6 +838,7 @@ namespace yugen
                     return 1.0f;
                }
                cached_vol = vol;
+               DBG("Loaded volume from disk: {}", vol);
                return vol;
           }
 
@@ -927,6 +1126,7 @@ namespace yugen
           std::lock_guard<std::mutex> lk(cover_mtx);
 
           load_cover_cache();
+
           cover_cache[key] = url;
           cover_inflight.erase(key);
 
@@ -1440,7 +1640,7 @@ namespace yugen
       * is a race rather than a saving. A function-local static is initialised by
       * whichever thread arrives first while the rest wait, and it is const
       * afterwards - nobody writes to it again.
-      *
+      * 
       * >> stops at the first space, which is what trims the newline off a file
       * written by a shell.
       */

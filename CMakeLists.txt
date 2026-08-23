@@ -77,6 +77,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${GIO_INCLUDE_DIRS}
 )
 
+# what the DBG tracing in services.cpp is compiled behind. a release build never
+# defines it, so those lines are not in the binary at all rather than being calls
+# that print nothing
+target_compile_definitions(yugen PRIVATE $<$<CONFIG:Debug>:DEBUG>)
 target_compile_options(${PROJECT_NAME} PRIVATE
     -Wall
     -Wextra
