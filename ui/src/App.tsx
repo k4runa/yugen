@@ -5,6 +5,9 @@ const LAYOUT_KEY = 'yugen.layout'
 
 const AURA_RANGE = [0, 100] as const
 
+// .profile-menu is 11rem wide, and it hangs off the right edge of the avatar
+const PROFILE_MENU_W = 176
+
 // widths are shares of the window, so the columns keep following it after a manual resize.
 // the rem pair is the floor/ceiling css clamps them to at extreme window sizes.
 const SIDEBAR_RANGE = [8, 26] as const
@@ -686,6 +689,12 @@ type Bridge = {
     remove_from_playlist(playlist: string, name: string): Promise<boolean>
     set_volume(volume: number) : Promise<void>
     load_volume() : Promise<number>
+    // settings.json, a flat string map. get_all_keybinds() hands the whole file
+    // over as json text, not only the shortcut rows, so it is read by prefix
+    set_keybind(key: string, value: string): Promise<boolean>
+    remove_keybind(key: string): Promise<boolean>
+    get_keybind(key: string): Promise<string>
+    get_all_keybinds(): Promise<string>
     get_music_dir(): Promise<string>
     mpris_track(
         title: string,
@@ -1209,6 +1218,10 @@ const ICONS = {
     user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4.5 20a7.5 7.5 0 0 1 15 0',
     star: 'M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z',
     upload: 'M12 15V4m0 0L8 8m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3',
+    keyboard:
+        'M3 6h18v12H3zM6.5 9.5h.01M10 9.5h.01M13.5 9.5h.01M17 9.5h.01M6.5 12.5h.01M17 12.5h.01M8.5 15.5h7',
+    settings:
+        'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.3a2 2 0 1 1-4 0V21a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14.2H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.3 7.3l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.3V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1',
 }
 
 // the shelf is the sidebar's own list. it holds the playlists, and whatever else
@@ -1218,6 +1231,267 @@ const SHELVES: { id: Shelf; label: string; icon: string }[] = [
     { id: 'albums', label: 'Albums', icon: ICONS.album },
     { id: 'artists', label: 'Artists', icon: ICONS.artist },
 ]
+
+/*
+ * Keyboard shortcuts.
+ *
+ * The table below is the whole feature: a row here is a row in the dialog, an
+ * entry in the lookup the window handler reads, and a line in what is saved -
+ * adding a shortcut is adding a row and a case, and nothing else.
+ *
+ * A binding is stored as its modifiers and its key joined with +, and the key
+ * part is e.code rather than e.key: the physical key, so a shortcut set on one
+ * layout stays under the same finger on another, and so Shift+1 does not have
+ * to be spelled Shift+!.
+ *
+ * Enter and Escape are deliberately not in here. They are not shortcuts but the
+ * two answers every dialog in the app takes - confirm and dismiss - and letting
+ * them be rebound would leave windows nothing to be closed with.
+ */
+type Bind =
+    | 'play_pause'
+    | 'seek_forward'
+    | 'seek_back'
+    | 'next_track'
+    | 'prev_track'
+    | 'volume_up'
+    | 'volume_down'
+    | 'toggle_like'
+    | 'toggle_shuffle'
+    | 'toggle_loop'
+
+// needs_track: what has nothing to act on until something is cued. volume,
+// shuffle and loop are settings and stand on their own
+const KEYBINDS: { id: Bind; label: string; fallback: string; needs_track: boolean }[] = [
+    { id: 'play_pause', label: 'Play / pause', fallback: 'Space', needs_track: true },
+    { id: 'seek_forward', label: 'Forward 10 seconds', fallback: 'ArrowRight', needs_track: true },
+    { id: 'seek_back', label: 'Back 10 seconds', fallback: 'ArrowLeft', needs_track: true },
+    { id: 'next_track', label: 'Next track', fallback: 'Ctrl+ArrowRight', needs_track: true },
+    { id: 'prev_track', label: 'Previous track', fallback: 'Ctrl+ArrowLeft', needs_track: true },
+    { id: 'volume_up', label: 'Volume up', fallback: 'ArrowUp', needs_track: false },
+    { id: 'volume_down', label: 'Volume down', fallback: 'ArrowDown', needs_track: false },
+    { id: 'toggle_like', label: 'Like the playing track', fallback: 'KeyL', needs_track: true },
+    { id: 'toggle_shuffle', label: 'Cycle shuffle', fallback: 'KeyS', needs_track: false },
+    { id: 'toggle_loop', label: 'Toggle repeat', fallback: 'KeyR', needs_track: false },
+]
+
+const VOLUME_STEP = 0.05
+
+// held down, these are half a shortcut - the row keeps listening for the rest
+const MODIFIER_CODES = [
+    'ControlLeft',
+    'ControlRight',
+    'AltLeft',
+    'AltRight',
+    'ShiftLeft',
+    'ShiftRight',
+    'MetaLeft',
+    'MetaRight',
+]
+
+// what a key is called on the cap, where e.code's own name would be noise
+const KEY_LABELS: Record<string, string> = {
+    Space: 'Space',
+    ArrowUp: '↑',
+    ArrowDown: '↓',
+    ArrowLeft: '←',
+    ArrowRight: '→',
+    Backspace: 'Backspace',
+    Delete: 'Delete',
+    Tab: 'Tab',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'Page up',
+    PageDown: 'Page down',
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    BracketLeft: '[',
+    BracketRight: ']',
+    Minus: '-',
+    Equal: '=',
+    Backquote: '`',
+}
+
+function combo_of(e: KeyboardEvent): string {
+    const parts: string[] = []
+
+    if (e.ctrlKey) parts.push('Ctrl')
+    if (e.altKey) parts.push('Alt')
+    if (e.shiftKey) parts.push('Shift')
+    if (e.metaKey) parts.push('Super')
+
+    parts.push(e.code)
+
+    return parts.join('+')
+}
+
+function key_label(combo: string): string {
+    if (!combo) return 'Unbound'
+
+    const parts = combo.split('+')
+    const code = parts.pop() ?? ''
+
+    const name =
+        KEY_LABELS[code] ??
+        (code.startsWith('Key')
+            ? code.slice(3)
+            : code.startsWith('Digit')
+              ? code.slice(5)
+              : code.startsWith('Numpad')
+                ? `Num ${code.slice(6)}`
+                : code)
+
+    return [...parts, name].join(' + ')
+}
+
+const default_keybinds = (): Record<Bind, string> =>
+    Object.fromEntries(KEYBINDS.map((bind) => [bind.id, bind.fallback])) as Record<Bind, string>
+
+/*
+ * The shortcuts sit in settings.json next to the playlists rather than in
+ * localStorage, so they are one flat string per action under a prefix of their
+ * own - the file is shared with whatever else ends up being a setting.
+ *
+ * Two of the three states an action can be in are a key and no key; the third
+ * is never having been touched, which is the row simply not being in the file.
+ * Settings::set refuses an empty value, so "cleared on purpose" cannot be
+ * written as "" and is spelled out instead - no combination ever reads that
+ * way, since a key is always a code like KeyU.
+ */
+const KEYBIND_PREFIX = 'keybind.'
+const UNBOUND = 'unbound'
+
+const keybind_key = (id: Bind) => KEYBIND_PREFIX + id
+
+function read_keybinds(settings: string): Record<Bind, string> {
+    const binds = default_keybinds()
+
+    try {
+        // an empty file comes back as an empty string rather than as {}
+        const saved = JSON.parse(settings || '{}')
+        if (!saved || typeof saved !== 'object') return binds
+
+        for (const bind of KEYBINDS) {
+            const value = saved[keybind_key(bind.id)]
+            if (typeof value !== 'string' || !value) continue
+
+            binds[bind.id] = value === UNBOUND ? '' : value
+        }
+
+        return binds
+    } catch {
+        return binds
+    }
+}
+
+type SwitchProps = { on: boolean; label: string; on_toggle: () => void }
+
+// role and aria-checked rather than a checkbox: the knob is a button so that it
+// takes the same focus ring and the same press as every other control here
+function Switch({ on, label, on_toggle }: SwitchProps) {
+    return (
+        <button
+            className={`switch${on ? ' on' : ''}`}
+            role='switch'
+            aria-checked={on}
+            aria-label={label}
+            onClick={on_toggle}
+        >
+            <span className='switch-knob' />
+        </button>
+    )
+}
+
+type KeybindEditorProps = {
+    binds: Record<Bind, string>
+    on_change: (next: Record<Bind, string>) => void
+}
+
+function KeybindEditor({ binds, on_change }: KeybindEditorProps) {
+    const [listening, set_listening] = useState<Bind | null>(null)
+    // the row a key was just taken away from, so the hint can say where it went
+    const [taken, set_taken] = useState('')
+
+    /*
+     * While a row is listening every key belongs to it, which is why this runs
+     * in capture and stops what it catches. Stopping it is also what keeps the
+     * shortcut being pressed from firing: the handler the rest of the app reads
+     * keys through sits on the same window, one phase later.
+     */
+    useEffect(() => {
+        if (!listening) return
+
+        const on_key = (e: KeyboardEvent) => {
+            if (MODIFIER_CODES.includes(e.code)) return
+
+            e.preventDefault()
+            e.stopPropagation()
+
+            if (e.code === 'Escape') {
+                set_listening(null)
+                return
+            }
+
+            // the one way to leave an action with no key at all
+            if (e.code === 'Backspace' || e.code === 'Delete') {
+                set_taken('')
+                set_listening(null)
+                on_change({ ...binds, [listening]: '' })
+                return
+            }
+
+            const combo = combo_of(e)
+            const next = { ...binds, [listening]: combo }
+            const clash = KEYBINDS.find((bind) => bind.id !== listening && binds[bind.id] === combo)
+
+            // one key, one job: whoever held it loses it rather than both firing
+            if (clash) next[clash.id] = ''
+
+            set_taken(clash?.label ?? '')
+            set_listening(null)
+            on_change(next)
+        }
+
+        window.addEventListener('keydown', on_key, true)
+
+        return () => window.removeEventListener('keydown', on_key, true)
+    }, [listening, binds, on_change])
+
+    return (
+        <>
+            <div className='keys-list'>
+                {KEYBINDS.map((bind) => (
+                    <div className='keys-row' key={bind.id}>
+                        <span className='ellipsis'>{bind.label}</span>
+                        <button
+                            className={`key-cap${listening === bind.id ? ' listening' : ''}${
+                                binds[bind.id] ? '' : ' unbound'
+                            }`}
+                            onClick={() => {
+                                set_taken('')
+                                set_listening(bind.id)
+                            }}
+                        >
+                            {listening === bind.id ? 'Press a key' : key_label(binds[bind.id])}
+                        </button>
+                    </div>
+                ))}
+            </div>
+
+            <p className='set-note'>
+                {listening
+                    ? 'Press the keys. Backspace leaves it unbound, escape keeps what it was.'
+                    : taken
+                      ? `Taken from ${taken}, which has no key now.`
+                      : 'Click a shortcut to change it. None of them fire while you are typing in a field.'}
+            </p>
+        </>
+    )
+}
 
 // a picked photo is almost never square, so it stops here on the way in: the
 // window below is the circle the avatar will become, and the picture is
@@ -1417,6 +1691,9 @@ export default function App() {
     const [theme, set_theme] = useState<Theme>(() => stored_pref('theme', THEMES, 'system'))
     // the switch, and how much of the cover reaches the background while it is on:
     // 0 leaves a scrim over nearly all of it, 100 is the artwork with none at all
+    const [keybinds, set_keybinds] = useState<Record<Bind, string>>(default_keybinds)
+    const [settings_open, set_settings_open] = useState(false)
+    const [profile_menu, set_profile_menu] = useState<{ x: number; y: number } | null>(null)
     const [aura_on, set_aura_on] = useState(() => stored_flag('aura_on', true))
     const [aura, set_aura] = useState(() => stored_number('aura', 50, AURA_RANGE))
     const [aura_menu, set_aura_menu] = useState<{ x: number; y: number } | null>(null)
@@ -1854,6 +2131,58 @@ export default function App() {
         }
     }, [search_open])
 
+    /*
+     * Escape leaves the settings page, the same as it dismisses everything
+     * else. Whatever is stacked on top of it answers first: a menu or a window
+     * is what escape was aimed at, and closing the page underneath it as well
+     * would take two things away for one press.
+     */
+    useEffect(() => {
+        if (!settings_open) return
+
+        const on_key = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return
+            if (dialog || profile_edit_open || crop_src || info_open || search_open) return
+            if (menu || profile_menu || volume_menu || aura_menu) return
+
+            set_settings_open(false)
+        }
+
+        window.addEventListener('keydown', on_key)
+
+        return () => window.removeEventListener('keydown', on_key)
+    }, [
+        settings_open,
+        dialog,
+        profile_edit_open,
+        crop_src,
+        info_open,
+        search_open,
+        menu,
+        profile_menu,
+        volume_menu,
+        aura_menu,
+    ])
+
+    useEffect(() => {
+        if (!profile_menu) return
+
+        const close = () => set_profile_menu(null)
+        const on_key = (e: KeyboardEvent) => e.key === 'Escape' && close()
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+        window.addEventListener('keydown', on_key)
+        document.addEventListener('scroll', close, true)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+            window.removeEventListener('keydown', on_key)
+            document.removeEventListener('scroll', close, true)
+        }
+    }, [profile_menu])
+
     useEffect(() => {
         if (!library_menu) return
 
@@ -1925,6 +2254,7 @@ export default function App() {
             sync_liked()
             sync_profile()
             load_favorites()
+            sync_keybinds()
 
             // the listing that was open last time may not have survived: a
             // playlist that was deleted, an album whose files left the folder
@@ -2072,6 +2402,16 @@ export default function App() {
             set_liked(new Set(await bridge().get_liked_songs()))
         } catch {
             // keep showing whatever we have rather than dropping the list
+        }
+    }
+
+    async function sync_keybinds() {
+        try {
+            set_keybinds(read_keybinds(await bridge().get_all_keybinds()))
+        } catch {
+            // the defaults are already in state and are what the dialog will
+            // show, so a settings.json that cannot be read costs the shortcuts
+            // nothing but the choices made in it
         }
     }
 
@@ -3088,24 +3428,82 @@ export default function App() {
     const next_shuffle = (): Shuffle =>
         shuffle_mode === 'off' ? 'listing' : shuffle_mode === 'listing' ? 'all' : 'off'
 
+    const change_keybinds = (next: Record<Bind, string>) => {
+        const before = keybinds
+        set_keybinds(next)
+
+        void (async () => {
+            for (const bind of KEYBINDS) {
+                const combo = next[bind.id]
+                if (combo === before[bind.id]) continue
+
+                try {
+                    // back to the default is the row not being in the file at
+                    // all, so a later change of heart about the default reaches
+                    // whoever never picked a key of their own
+                    if (combo === bind.fallback) await bridge().remove_keybind(keybind_key(bind.id))
+                    else await bridge().set_keybind(keybind_key(bind.id), combo || UNBOUND)
+                } catch {
+                    // the shortcut works for this run, it just will not be
+                    // there the next time yugen opens
+                }
+            }
+        })()
+    }
+
     useEffect(() => {
         const on_key = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement | null
 
-            // the search box keeps its keys
-            if (target?.tagName === 'INPUT' || target?.isContentEditable) return
-            if (e.ctrlKey || e.altKey || e.metaKey || !current) return
+            const tag = target?.tagName
 
-            if (e.code === 'Space') {
-                // also stops the key from activating whichever button holds focus
-                e.preventDefault()
-                toggle_pause()
-                return
-            }
+            // anything that takes typing keeps its keys - the bio box is a
+            // textarea, and a check that only knows INPUT eats the spaces
+            // meant for it
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+            if (target?.isContentEditable) return
 
-            if (e.code === 'ArrowRight' || e.code === 'ArrowLeft') {
-                e.preventDefault()
-                nudge(e.code === 'ArrowRight' ? 10 : -10)
+            const combo = combo_of(e)
+            const bind = KEYBINDS.find((entry) => keybinds[entry.id] && keybinds[entry.id] === combo)
+
+            if (!bind || (bind.needs_track && !current)) return
+
+            // also stops the key from activating whichever button holds focus
+            e.preventDefault()
+
+            switch (bind.id) {
+                case 'play_pause':
+                    toggle_pause()
+                    break
+                case 'seek_forward':
+                    void nudge(10)
+                    break
+                case 'seek_back':
+                    void nudge(-10)
+                    break
+                case 'next_track':
+                    skip(1)
+                    break
+                case 'prev_track':
+                    skip(-1)
+                    break
+                case 'volume_up':
+                    change_volume(Math.min(volume + VOLUME_STEP, 1))
+                    break
+                case 'volume_down':
+                    change_volume(Math.max(volume - VOLUME_STEP, 0))
+                    break
+                case 'toggle_like':
+                    // needs_track already covered this, but only the check
+                    // written out here narrows it away for the compiler
+                    if (current) void toggle_like(current)
+                    break
+                case 'toggle_shuffle':
+                    void shuffle_into(next_shuffle())
+                    break
+                case 'toggle_loop':
+                    void toggle_loop()
+                    break
             }
         }
 
@@ -3113,7 +3511,7 @@ export default function App() {
 
         return () => window.removeEventListener('keydown', on_key)
         // eslint-disable-next-line react-hooks/exhaustive-deps -- the handlers read these directly
-    }, [current, paused, position, length])
+    }, [current, paused, position, length, volume, keybinds, shuffle_mode, looped])
 
     // miniaudio parks the cursor at the end of a track, so is_finished drives the queue
     useEffect(() => {
@@ -3739,6 +4137,154 @@ export default function App() {
 
                 {track_cards(names)}
             </section>
+        )
+    }
+
+    // the two pages the avatar leads to are one place at a time
+    function open_profile() {
+        set_settings_open(false)
+        set_profile_open(true)
+    }
+
+    function open_settings() {
+        set_profile_open(false)
+        set_settings_open(true)
+    }
+
+    /*
+     * Settings. What is here is what was already scattered across the player
+     * bar as icons with a tooltip each - the same state, one place, with room
+     * to say what a switch actually does. The bar keeps its buttons: they are
+     * the quick way, this is the readable one.
+     */
+    function settings_page() {
+        return (
+            <>
+                <div className='view-head'>
+                    <button
+                        className='icon-btn back'
+                        {...tip('Back')}
+                        onClick={() => set_settings_open(false)}
+                    >
+                        <Icon d={ICONS.back} size={17} />
+                    </button>
+                    <h2 className='section-title'>Settings</h2>
+                </div>
+
+                <div className='settings-page'>
+                    <section className='set-group'>
+                        <h3 className='set-title'>
+                            <Icon d={ICONS.aura} size={15} />
+                            Appearance
+                        </h3>
+
+                        <div className='set-row'>
+                            <div className='set-text'>
+                                <span>Theme</span>
+                                <p>System follows whatever the desktop is set to.</p>
+                            </div>
+                            <div className='set-choice'>
+                                {THEMES.map((option) => (
+                                    <button
+                                        key={option}
+                                        className={`chip${theme === option ? ' on' : ''}`}
+                                        onClick={() => {
+                                            set_theme(option)
+                                            save_pref('theme', option)
+                                        }}
+                                    >
+                                        {option[0].toUpperCase() + option.slice(1)}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className='set-row'>
+                            <div className='set-text'>
+                                <span>Cover tint</span>
+                                <p>Lets the artwork colour the background behind it.</p>
+                            </div>
+                            <Switch
+                                on={aura_on}
+                                label='Cover tint'
+                                on_toggle={() => {
+                                    set_aura_on(!aura_on)
+                                    save_pref('aura_on', !aura_on)
+                                }}
+                            />
+                        </div>
+
+                        {/* it stays on the page while the tint is off rather than
+                            appearing out of nowhere when it comes back on */}
+                        <div className={`set-row${aura_on ? '' : ' dimmed'}`}>
+                            <div className='set-text'>
+                                <span>Tint strength</span>
+                                <p>How much of the cover reaches the background.</p>
+                            </div>
+                            <div className='set-slider'>
+                                <input
+                                    className='slider'
+                                    type='range'
+                                    min={AURA_RANGE[0]}
+                                    max={AURA_RANGE[1]}
+                                    step={5}
+                                    value={aura}
+                                    disabled={!aura_on}
+                                    aria-label='Cover tint strength'
+                                    onChange={(e) => set_aura(Number(e.currentTarget.value))}
+                                    // written once the drag ends rather than on every step
+                                    onPointerUp={() => save_pref('aura', aura)}
+                                    onKeyUp={() => save_pref('aura', aura)}
+                                />
+                                <span>{aura}%</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className='set-group'>
+                        <h3 className='set-title'>
+                            <Icon d={ICONS.discord} size={15} />
+                            Sharing
+                        </h3>
+
+                        <div className='set-row'>
+                            <div className='set-text'>
+                                <span>Discord activity</span>
+                                <p>Puts the track you are playing on your Discord profile.</p>
+                            </div>
+                            <Switch
+                                on={share_dc}
+                                label='Share activity on Discord'
+                                on_toggle={() => {
+                                    // setting it rather than flipping it, so a click
+                                    // that lands twice cannot leave the two sides
+                                    // disagreeing
+                                    void bridge().set_activity(!share_dc)
+
+                                    set_share_dc(!share_dc)
+                                    save_pref('share_dc', !share_dc)
+                                }}
+                            />
+                        </div>
+                    </section>
+
+                    <section className='set-group'>
+                        <h3 className='set-title'>
+                            <Icon d={ICONS.keyboard} size={15} />
+                            Keyboard shortcuts
+                        </h3>
+
+                        <KeybindEditor binds={keybinds} on_change={change_keybinds} />
+
+                        <button
+                            className='set-reset'
+                            onClick={() => change_keybinds(default_keybinds())}
+                        >
+                            Reset to defaults
+                        </button>
+                    </section>
+                </div>
+            </>
         )
     }
 
@@ -4888,7 +5434,21 @@ export default function App() {
                                 {...tip(username ? `Hello, ${username}` : 'Profile')}
                                 onClick={(e) => {
                                     e.stopPropagation()
-                                    set_profile_open(true)
+                                    open_profile()
+                                }}
+                                // the secondary action lives behind a right-click
+                                // here the same as everywhere else in the app
+                                onContextMenu={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+
+                                    const rect = e.currentTarget.getBoundingClientRect()
+
+                                    set_profile_menu(
+                                        profile_menu
+                                            ? null
+                                            : { x: rect.right - PROFILE_MENU_W, y: rect.bottom + 8 },
+                                    )
                                 }}
                             >
                                 <Avatar data={profile_pic} size='sm' alt={username || 'Profile'} />
@@ -4896,7 +5456,9 @@ export default function App() {
                         )}
                     </div>
 
-                    {profile_open ? (
+                    {settings_open ? (
+                        settings_page()
+                    ) : profile_open ? (
                         <>
                         <div className='view-head'>
                             <button
@@ -5530,6 +6092,22 @@ export default function App() {
                 </div>
             )}
 
+            {profile_menu && (
+                <div
+                    className='context-menu profile-menu'
+                    style={{ left: profile_menu.x, top: profile_menu.y }}
+                >
+                    <button onClick={open_profile}>
+                        <Icon d={ICONS.user} size={15} />
+                        Profile
+                    </button>
+                    <button onClick={open_settings}>
+                        <Icon d={ICONS.settings} size={15} />
+                        Settings
+                    </button>
+                </div>
+            )}
+
             {library_menu && (
                 <div
                     className='filter-menu floating'
@@ -5726,6 +6304,12 @@ export default function App() {
                                             set_bio_draft(e.currentTarget.value)
                                         }
                                         onKeyDown={(e) => {
+                                            // enter is only ever the confirm key -
+                                            // a line break in the bio is shift+enter
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault()
+                                                commit_profile_edit()
+                                            }
                                             if (e.key === 'Escape')
                                                 set_profile_edit_open(false)
                                         }}
