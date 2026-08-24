@@ -68,6 +68,7 @@ namespace yugen
 {
      namespace
      {
+          constexpr const char* SETTINGS_FILE    = "/settings.json";
           constexpr const char* PLAYLISTS_FILE   = "/playlists.json";
           // every sheet lrclib has ever answered with, so the second run of the
           // player is not the first one again
@@ -1750,5 +1751,83 @@ namespace yugen
           if(playlist.empty() || playlist["cover"].empty()) return "";
 
           return playlist["cover"];
+     }
+
+     json Settings::load_data()
+     {
+          const std::string path = config_dir() + SETTINGS_FILE;
+          std::ifstream f(path);
+          if(!f.is_open()) return json::object();
+          json data = json::parse(f, nullptr, false);
+          if(!data.is_discarded() && data.is_object()) return data;
+          return json::object();
+     }
+
+     bool Settings::save_data(const json& data)
+     {
+          const std::string path = config_dir() + SETTINGS_FILE;
+          std::ofstream out(path);
+          if(!out.is_open()) return false;
+          out << data;
+          out.close();
+          if(out.fail()) return false;
+          return true;
+     }
+
+     bool Settings::set(const std::string &key, const std::string &value)
+     {
+          if(key.empty() || value.empty()) {
+               DBG("IN FUNCTION Settings::set, Key or Value is empty. Key: {} - Value: {}", key, value);
+               if(value.empty()) {
+                    return false;
+               }
+          }
+
+          json data = load_data();
+          if(data.empty()) {
+               DBG("IN FUNCTION Settings::set, Empty data  detected. Data: {} ", data.dump());
+          }
+
+          data[key] = value;
+          return save_data(data);
+
+     }
+
+     bool Settings::remove(const std::string &key)
+     {
+          if(key.empty()) {
+               DBG("IN FUNCTION Settings::remove, Key is empty. Key: {} ", key);
+          }
+
+          json data = load_data();
+          if(data.empty()) {
+               DBG("IN FUNCTION Settings::remove, Empty data  detected. Data: {} ", data.dump());
+               return false;
+          }
+
+          if(data.erase(key) == 0) return false;
+          return save_data(data);
+     }
+
+     std::string Settings::get(const std::string &key)
+     {
+          if(key.empty()) {
+               DBG("IN FUNCTION Settings::get, Key is empty. Key: {} ", key);
+               return "";
+          }
+
+          const json data = load_data();
+          if(data.empty()) return "";
+          if(!data.contains(key)) return "";
+
+          return data.at(key).get<std::string>();
+     }
+
+     std::string Settings::get_all()
+     {
+          const json data = load_data();
+          if(data.empty()) return "";
+
+          return data.dump();
      }
 }

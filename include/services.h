@@ -219,8 +219,13 @@ namespace yugen
      class Settings 
      {
           public:
-               // Nothing here
+               static bool set(const std::string& key, const std::string& value);
+               static bool remove(const std::string& key);
+               static std::string get(const std::string& key);
+               static std::string get_all();
+
           private:
-               // Also nothing here, for now..
+               static bool save_data(const json& data);
+               static json load_data();
      };
 }
