@@ -2811,14 +2811,23 @@ export default function App() {
         await sync_liked()
     }
 
-    function open_playlist(name: string) {
+    // settings and the profile are both whole pages drawn over the library, and
+    // every way of navigating has to put them away first. leaving it to each
+    // caller is how the sidebar ended up changing the view underneath a settings
+    // page that stayed on screen, so there is one door out and they all use it.
+    function leave_page() {
         set_profile_open(false)
+        set_settings_open(false)
+    }
+
+    function open_playlist(name: string) {
+        leave_page()
         set_view('playlist')
         set_selection(name)
     }
 
     function open_view(next: View) {
-        set_profile_open(false)
+        leave_page()
         set_view(next)
         set_selection(null)
     }
@@ -4764,7 +4773,7 @@ export default function App() {
         if (row.kind === 'playlists') return open_playlist(row.name)
 
         // albums and artists are grouped views with one group picked out
-        set_profile_open(false)
+        leave_page()
         set_view(row.kind)
         set_selection(row.name)
     }
