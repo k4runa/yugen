@@ -778,18 +778,218 @@ const tip = (text: string) => ({ 'data-tip': text, 'aria-label': text })
 const sideways = (box: HTMLElement | null) => {
     if (!box) return
 
+    // a notch of the wheel used to be written straight onto scrollLeft, which is
+    // the row jumping a hundred-odd pixels between two frames. the notches are
+    // collected into a target instead and the row is eased towards it, so a
+    // flick of the wheel reads as the shelf being pushed rather than cut.
+    let target = box.scrollLeft
+    let pos = box.scrollLeft
+    let frame = 0
+    let last = 0
+
+    const glide = (now: number) => {
+        const step = last ? Math.min(now - last, 64) : 16
+        last = now
+
+        // its own position, not scrollLeft read back: see the note on the
+        // vertical glide for what a rounded reading does to the last pixel
+        pos += (target - pos) * (1 - Math.exp(-step / 90))
+
+        if (Math.abs(target - pos) < 0.5) {
+            pos = target
+            box.scrollLeft = pos
+            frame = 0
+
+            return
+        }
+
+        box.scrollLeft = pos
+        frame = requestAnimationFrame(glide)
+    }
+
     const on_wheel = (event: WheelEvent) => {
         // a trackpad already swiping sideways is left alone
         if (box.scrollWidth <= box.clientWidth) return
         if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
 
         event.preventDefault()
-        box.scrollLeft += event.deltaY
+
+        if (!frame) pos = box.scrollLeft
+
+        // where it is actually sitting, unless a glide is already on its way to
+        // somewhere - then that somewhere is what the notch adds to
+        const from = frame ? target : pos
+        const limit = box.scrollWidth - box.clientWidth
+
+        target = Math.min(Math.max(from + event.deltaY, 0), limit)
+
+        if (!frame) {
+            last = 0
+            frame = requestAnimationFrame(glide)
+        }
     }
 
     box.addEventListener('wheel', on_wheel, { passive: false })
 
-    return () => box.removeEventListener('wheel', on_wheel)
+    return () => {
+        box.removeEventListener('wheel', on_wheel)
+        if (frame) cancelAnimationFrame(frame)
+    }
+}
+
+/*
+ * Every scroll in this app happens inside a panel: index.css pins html and body
+ * at one screen, so nothing ever scrolls the page. That is the case a mouse
+ * wheel is worst at - a notch is written straight onto scrollTop and the panel
+ * steps instead of moving. This catches the notches and eases the panel towards
+ * where they add up to, which is the same trick the sideways shelves use.
+ *
+ * A trackpad is left alone. It already arrives as a fine stream with the
+ * platform's own momentum behind it, and anything under a notch in size is
+ * taken to be one. Calling preventDefault is also what keeps this from stacking
+ * on top of whatever smoothing the engine does: cancelling the event takes the
+ * native scroll out of it entirely, so there is only ever one animation.
+ */
+const NOTCH = 40
+const LINE = 40
+// the spring's natural frequency in rad/s: a notch is done in about a fifth of
+// a second, which is close to how fast a hand can turn the wheel
+const SPRING = 17
+
+function useGlideScroll() {
+    useEffect(() => {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+        let box: HTMLElement | null = null
+        let target = 0
+        let pos = 0
+        let vel = 0
+        let frame = 0
+        let last = 0
+
+        // Easing towards a target the plain way - take a fixed fraction of what
+        // is left each frame - spends most of the distance in the first few
+        // frames and then crawls the last handful of pixels, and every notch
+        // starts again from a standstill. Turning the wheel steadily then reads
+        // as a row of separate lurches rather than one movement.
+        //
+        // This is a critically damped spring instead: it has a speed, so a notch
+        // arriving while the panel is already moving adds to that speed rather
+        // than restarting the curve, and the whole run of notches comes out as
+        // one continuous glide that settles without overshooting.
+        const advance = (step: number) => {
+            // fixed sub-steps: at one integration per frame a spring this stiff
+            // is close enough to the edge of stability to wobble on a long frame
+            let left = step
+
+            while (left > 0) {
+                const dt = Math.min(left, 8) / 1000
+                left -= 8
+
+                vel += (SPRING * SPRING * (target - pos) - 2 * SPRING * vel) * dt
+                pos += vel * dt
+            }
+        }
+
+        const glide = (now: number) => {
+            if (!box) {
+                frame = 0
+
+                return
+            }
+
+            const step = last ? Math.min(now - last, 64) : 16
+            last = now
+
+            advance(step)
+
+            if (Math.abs(target - pos) < 0.4 && Math.abs(vel) < 14) {
+                pos = target
+                vel = 0
+                box.scrollTop = pos
+                frame = 0
+
+                return
+            }
+
+            box.scrollTop = pos
+            frame = requestAnimationFrame(glide)
+        }
+
+        // the panel the pointer is actually over, which is not always the one
+        // the event was aimed at
+        const scroller = (node: EventTarget | null) => {
+            let el = node instanceof Element ? node : null
+
+            while (el && el !== document.body) {
+                if (el.scrollHeight - el.clientHeight > 1) {
+                    const flow = getComputedStyle(el).overflowY
+
+                    if (flow === 'auto' || flow === 'scroll') return el as HTMLElement
+                }
+
+                el = el.parentElement
+            }
+
+            return null
+        }
+
+        const on_wheel = (event: WheelEvent) => {
+            // a sideways shelf has already claimed it, or the wheel is a zoom
+            if (event.defaultPrevented || event.ctrlKey) return
+            if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+            if (event.deltaMode === 0 && Math.abs(event.deltaY) < NOTCH) return
+
+            const found = scroller(event.target)
+            if (!found) return
+
+            // whatever the platform counts in, in pixels
+            const push =
+                event.deltaMode === 1
+                    ? event.deltaY * LINE
+                    : event.deltaMode === 2
+                      ? event.deltaY * found.clientHeight * 0.9
+                      : event.deltaY
+
+            if (box !== found) {
+                if (frame) cancelAnimationFrame(frame)
+
+                box = found
+                frame = 0
+            }
+
+            // between notches the panel may have been moved by something else -
+            // a dragged scrollbar, a keyboard - so the glide re-reads where it
+            // really is whenever it is not already on its way somewhere. a run
+            // that is still going keeps its speed; that is the point of it.
+            if (!frame) {
+                pos = found.scrollTop
+                vel = 0
+            }
+
+            const from = frame ? target : pos
+            const next = Math.min(Math.max(from + push, 0), found.scrollHeight - found.clientHeight)
+
+            // at either end of its travel the wheel is handed back rather than
+            // swallowed, so the gesture still belongs to whatever is behind it
+            if (next === from) return
+
+            event.preventDefault()
+            target = next
+
+            if (!frame) {
+                last = 0
+                frame = requestAnimationFrame(glide)
+            }
+        }
+
+        window.addEventListener('wheel', on_wheel, { passive: false })
+
+        return () => {
+            window.removeEventListener('wheel', on_wheel)
+            if (frame) cancelAnimationFrame(frame)
+        }
+    }, [])
 }
 
 // saucer injects the bridge on the window at runtime
@@ -1086,6 +1286,47 @@ function useTip() {
     }, [])
 
     return tip
+}
+
+// the same problem the backdrop has, for everything that floats over the app.
+// a menu is only on screen while a piece of state holds, so clearing that state
+// takes the element away in the same frame and there is nothing left to play an
+// exit on. this keeps the last value for one more beat and flags it as closing,
+// which is all the .closing rules in the stylesheet need to run. the beat has to
+// outlast the animation, or the element is pulled out from under it.
+function usePresence<T>(value: T | null | false, ms: number) {
+    const [held, set_held] = useState<T | null>((value || null) as T | null)
+    const [closing, set_closing] = useState(false)
+    const [seen, set_seen] = useState(value)
+
+    // worked out while rendering rather than after it: the held copy is derived
+    // from the value that just changed, and react is explicit that adjusting
+    // state during render is what that case is for. doing it in an effect would
+    // paint one frame of the element already gone before the exit could start.
+    if (seen !== value) {
+        set_seen(value)
+
+        if (value) {
+            set_held(value as T)
+            set_closing(false)
+        } else if (held !== null) {
+            set_closing(true)
+        }
+    }
+
+    // the only thing left for an effect is forgetting it once the beat is up
+    useEffect(() => {
+        if (!closing) return
+
+        const timer = setTimeout(() => {
+            set_held(null)
+            set_closing(false)
+        }, ms)
+
+        return () => clearTimeout(timer)
+    }, [closing, ms])
+
+    return [held, closing ? ' closing' : ''] as const
 }
 
 // the outgoing artwork has to stay mounted while it fades, so the backdrop keeps both
@@ -2097,6 +2338,9 @@ export default function App() {
         }
     }, [info_menu])
 
+
+    // every panel in the app scrolls, and all of them the same way
+    useGlideScroll()
 
     const active_tip = useTip()
     const tip_box = useRef<HTMLDivElement>(null)
@@ -4023,10 +4267,13 @@ export default function App() {
     function track_list(names: string[]) {
         return (
             <div className='track-list'>
-                {names.map((name) => (
+                {names.map((name, i) => (
                     <div
                         key={name}
                         className={`row${current === name ? ' playing' : ''}`}
+                        // the same index the card grid deals itself out on, so a
+                        // list and a grid of the same tracks arrive alike
+                        style={{ '--i': i } as React.CSSProperties}
                         onClick={() => play_music(name)}
                         onContextMenu={song_context(name)}
                     >
@@ -5127,6 +5374,19 @@ export default function App() {
 
     const view_title = selection ?? NAV.find((item) => item.id === view)?.label ?? 'Playlists'
 
+    // every floating thing gets one beat to leave. the numbers are the exit
+    // animations in the stylesheet plus a frame, so nothing is ever pulled out
+    // from under its own animation.
+    const [open_menu, menu_out] = usePresence(menu, 200)
+    const [open_aura, aura_out] = usePresence(aura_menu, 200)
+    const [open_volume, volume_out] = usePresence(volume_menu, 200)
+    const [open_shuffle, shuffle_out] = usePresence(shuffle_menu, 200)
+    const [open_profile_menu, profile_out] = usePresence(profile_menu, 200)
+    const [open_library_menu, library_out] = usePresence(library_menu, 200)
+    const [shown_dialog, dialog_out] = usePresence(dialog, 260)
+    const [open_filters, filters_out] = usePresence(filters, 200)
+    const [open_search, search_out] = usePresence(search_open, 210)
+
     return (
         <div className='shell' onContextMenu={(e) => e.preventDefault()}>
             <div className='ambient' aria-hidden>
@@ -5380,8 +5640,8 @@ export default function App() {
                                     )}
                                 </div>
 
-                                {search_open && (
-                                    <div className='search-drop'>
+                                {open_search && (
+                                    <div className={`search-drop${search_out}`}>
                                         <div className='source-tabs'>
                                             {SOURCES.map((option) => (
                                                 <button
@@ -5710,8 +5970,8 @@ export default function App() {
                                         <Icon d={ICONS.filter} size={16} />
                                     </button>
 
-                                    {filters && (
-                                        <div className='filter-menu' onClick={(e) => e.stopPropagation()}>
+                                    {open_filters && (
+                                        <div className={`filter-menu${filters_out}`} onClick={(e) => e.stopPropagation()}>
                                             <div className='filter-label'>Sort by</div>
                                             {SORTS.map((option) => (
                                                 <button
@@ -5910,29 +6170,29 @@ export default function App() {
                 </div>
             )}
 
-            {menu && (
-                <div className='context-menu' style={{ left: menu.x, top: menu.y }}>
-                    {menu.kind === 'song' && (
+            {open_menu && (
+                <div className={`context-menu${menu_out}`} style={{ left: open_menu.x, top: open_menu.y }}>
+                    {open_menu.kind === 'song' && (
                         <>
-                            <div className='context-head ellipsis'>{title_of(menu.song)}</div>
-                            <button onClick={() => play_music(menu.song)}>
+                            <div className='context-head ellipsis'>{title_of(open_menu.song)}</div>
+                            <button onClick={() => play_music(open_menu.song)}>
                                 <Icon d={ICONS.play} size={15} fill />
                                 Play
                             </button>
-                            <button onClick={() => toggle_like(menu.song)}>
-                                <Icon d={ICONS.heart} size={15} fill={liked.has(menu.song)} />
-                                {liked.has(menu.song) ? 'Remove from liked' : 'Add to liked'}
+                            <button onClick={() => toggle_like(open_menu.song)}>
+                                <Icon d={ICONS.heart} size={15} fill={liked.has(open_menu.song)} />
+                                {liked.has(open_menu.song) ? 'Remove from liked' : 'Add to liked'}
                             </button>
-                            <button onClick={() => toggle_favorite(menu.song)}>
-                                <Icon d={ICONS.star} size={15} fill={is_favorite(menu.song)} />
-                                {is_favorite(menu.song) ? 'Remove from favorites' : 'Add to favorites'}
+                            <button onClick={() => toggle_favorite(open_menu.song)}>
+                                <Icon d={ICONS.star} size={15} fill={is_favorite(open_menu.song)} />
+                                {is_favorite(open_menu.song) ? 'Remove from favorites' : 'Add to favorites'}
                             </button>
 
                             {view === 'playlist' &&
                                 selection &&
-                                playlists[selection]?.includes(menu.song) && (
+                                playlists[selection]?.includes(open_menu.song) && (
                                     <button
-                                        onClick={() => remove_from_playlist(selection, menu.song)}
+                                        onClick={() => remove_from_playlist(selection, open_menu.song)}
                                     >
                                         <Icon d={ICONS.minus} size={15} />
                                         Remove from {selection}
@@ -5957,44 +6217,44 @@ export default function App() {
 
                                 {submenu && (
                                     <div className={`context-menu submenu${flip ? ' flip' : ''}`}>
-                                        {playlist_targets(menu.song)}
+                                        {playlist_targets(open_menu.song)}
                                     </div>
                                 )}
                             </div>
 
                             <div className='context-sep' />
-                            <button className='danger' onClick={() => remove_song(menu.song)}>
+                            <button className='danger' onClick={() => remove_song(open_menu.song)}>
                                 <Icon d={ICONS.trash} size={15} />
                                 Delete from disk
                             </button>
                         </>
                     )}
 
-                    {menu.kind === 'suggestion' && (
+                    {open_menu.kind === 'suggestion' && (
                         <>
                             <div className='context-head'>
-                                <div className='name ellipsis'>{menu.track.title}</div>
+                                <div className='name ellipsis'>{open_menu.track.title}</div>
                                 <div className='ellipsis'>
-                                    {menu.track.artist || 'Unknown artist'}
+                                    {open_menu.track.artist || 'Unknown artist'}
                                 </div>
                             </div>
-                            <button onClick={() => download_suggestion(menu.track)}>
+                            <button onClick={() => download_suggestion(open_menu.track)}>
                                 <Icon d={ICONS.download} size={15} />
                                 Download
                             </button>
                         </>
                     )}
 
-                    {menu.kind === 'playlist' && (
+                    {open_menu.kind === 'playlist' && (
                         <>
-                            <div className='context-head ellipsis'>{menu.playlist}</div>
-                            <button onClick={() => toggle_pin(menu.playlist)}>
+                            <div className='context-head ellipsis'>{open_menu.playlist}</div>
+                            <button onClick={() => toggle_pin(open_menu.playlist)}>
                                 <Icon d={ICONS.pin} size={15} />
-                                {pins.includes(menu.playlist) ? 'Unpin playlist' : 'Pin playlist'}
+                                {pins.includes(open_menu.playlist) ? 'Unpin playlist' : 'Pin playlist'}
                             </button>
                             <button
                                 onClick={() =>
-                                    open_dialog({ playlist: menu.playlist })
+                                    open_dialog({ playlist: open_menu.playlist })
                                 }
                             >
                                 <Icon d={ICONS.rename} size={15} />
@@ -6002,7 +6262,7 @@ export default function App() {
                             </button>
                             <button
                                 className='danger'
-                                onClick={() => delete_playlist(menu.playlist)}
+                                onClick={() => delete_playlist(open_menu.playlist)}
                             >
                                 <Icon d={ICONS.trash} size={15} />
                                 Delete playlist
@@ -6010,7 +6270,7 @@ export default function App() {
                         </>
                     )}
 
-                    {menu.kind === 'sidebar' && (
+                    {open_menu.kind === 'sidebar' && (
                         <button onClick={() => new_playlist()}>
                             <Icon d={ICONS.plus} size={15} />
                             New playlist
@@ -6019,10 +6279,10 @@ export default function App() {
                 </div>
             )}
 
-            {aura_menu && (
+            {open_aura && (
                 <div
-                    className='aura-menu'
-                    style={{ left: aura_menu.x, top: aura_menu.y }}
+                    className={`aura-menu${aura_out}`}
+                    style={{ left: open_aura.x, top: open_aura.y }}
                     onClick={(e) => e.stopPropagation()}
                     onContextMenu={(e) => e.preventDefault()}
                 >
@@ -6047,10 +6307,10 @@ export default function App() {
                 </div>
             )}
 
-            {volume_menu && (
+            {open_volume && (
                 <div
-                    className='aura-menu'
-                    style={{ left: volume_menu.x, top: volume_menu.y }}
+                    className={`aura-menu${volume_out}`}
+                    style={{ left: open_volume.x, top: open_volume.y }}
                     onClick={(e) => e.stopPropagation()}
                     onContextMenu={(e) => e.preventDefault()}
                 >
@@ -6076,10 +6336,10 @@ export default function App() {
                 </div>
             )}
 
-            {shuffle_menu && (
+            {open_shuffle && (
                 <div
-                    className='filter-menu floating shuffle-menu'
-                    style={{ left: shuffle_menu.x, bottom: window.innerHeight - shuffle_menu.y }}
+                    className={`filter-menu floating shuffle-menu${shuffle_out}`}
+                    style={{ left: open_shuffle.x, bottom: window.innerHeight - open_shuffle.y }}
                     onClick={(e) => e.stopPropagation()}
                 >
                     <div className='filter-label'>Shuffle</div>
@@ -6101,10 +6361,10 @@ export default function App() {
                 </div>
             )}
 
-            {profile_menu && (
+            {open_profile_menu && (
                 <div
-                    className='context-menu profile-menu'
-                    style={{ left: profile_menu.x, top: profile_menu.y }}
+                    className={`context-menu profile-menu${profile_out}`}
+                    style={{ left: open_profile_menu.x, top: open_profile_menu.y }}
                 >
                     <button onClick={open_profile}>
                         <Icon d={ICONS.user} size={15} />
@@ -6117,10 +6377,10 @@ export default function App() {
                 </div>
             )}
 
-            {library_menu && (
+            {open_library_menu && (
                 <div
-                    className='filter-menu floating'
-                    style={{ left: library_menu.x, top: library_menu.y }}
+                    className={`filter-menu floating${library_out}`}
+                    style={{ left: open_library_menu.x, top: open_library_menu.y }}
                     onClick={(e) => e.stopPropagation()}
                 >
                     <div className='filter-label'>View as</div>
@@ -6139,8 +6399,8 @@ export default function App() {
                 </div>
             )}
 
-            {dialog && (
-                <div className='overlay' onClick={() => set_dialog(null)}>
+            {shown_dialog && (
+                <div className={`overlay${dialog_out}`} onClick={() => set_dialog(null)}>
                     <div className='dialog' onClick={(e) => e.stopPropagation()}>
                         <h3>Edit details</h3>
 
@@ -6151,8 +6411,8 @@ export default function App() {
                         <div className='cover-pick'>
                             <span className='cover-mark playlist-art-wrap'>
                                 <Cover
-                                    data={playlist_cover(dialog.playlist)}
-                                    alt={dialog.playlist}
+                                    data={playlist_cover(shown_dialog.playlist)}
+                                    alt={shown_dialog.playlist}
                                     className='playlist-art'
                                 />
                                 <span className='kind-mark' aria-hidden>
@@ -6179,7 +6439,7 @@ export default function App() {
                                         onChange={(e) =>
                                             pick_image(e, {
                                                 kind: 'playlist',
-                                                name: dialog.playlist,
+                                                name: shown_dialog.playlist,
                                             })
                                         }
                                     />
@@ -6187,7 +6447,7 @@ export default function App() {
                             </span>
 
                             <p className='cover-pick-hint'>
-                                {playlist_covers[dialog.playlist]
+                                {playlist_covers[shown_dialog.playlist]
                                     ? 'This playlist has a cover of its own.'
                                     : 'Borrowing the cover of the first track in it.'}
                             </p>

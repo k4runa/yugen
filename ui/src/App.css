@@ -59,9 +59,18 @@
     /* Apple's sheet curve, and an overshoot for things that pop into place */
     --spring: cubic-bezier(0.32, 0.72, 0, 1);
     --pop: cubic-bezier(0.34, 1.5, 0.55, 1);
+    /* leaving is not arriving played backwards. things go out faster than they
+       came in and without any bounce, so an exit reads as being dismissed
+       rather than as one more thing arriving. */
+    --exit: cubic-bezier(0.4, 0.05, 0.75, 0.6);
+    /* --spring drives widths and radii as well, where leaning past the target
+       has nowhere to go, so it stays the plain curve. --settle is the one that
+       rings, and only things arriving on a layer of their own use it. */
+    --settle: var(--spring);
     --fast: 0.15s;
     --mid: 0.3s;
     --slow: 0.55s;
+    --quick: 0.19s;
 
     --blur: saturate(190%) blur(28px);
 }
@@ -132,6 +141,25 @@
 
     --art-min: 0.2;
     --art-max: 0.68;
+}
+
+/* a cubic-bezier can only lean past its endpoint and come back; it cannot ring.
+   where linear() is available the same two curves are the actual solution to a
+   damped spring, so what pops now overshoots, comes back a little short, and
+   settles - which is what the eye reads as weight rather than as a bounce. */
+@supports (animation-timing-function: linear(0, 1)) {
+    :root {
+        --pop: linear(
+            0, 0.0534, 0.1835, 0.3518, 0.5287, 0.6936, 0.834, 0.9441, 1.023,
+            1.0732, 1.0993, 1.1068, 1.1011, 1.0872, 1.0692, 1.0503, 1.0327,
+            1.0177, 1.006, 0.9975, 0.9922, 0.9894, 1
+        );
+        --settle: linear(
+            0, 0.0707, 0.229, 0.4151, 0.5924, 0.7422, 0.8576, 0.9392, 0.9918,
+            1.0218, 1.0354, 1.0384, 1.035, 1.0287, 1.0215, 1.0148, 1.0092,
+            1.005, 1.002, 1.0001, 1
+        );
+    }
 }
 
 button {
@@ -671,7 +699,7 @@ button {
     min-height: 0;
     border-top: 1px solid var(--line);
     transform-origin: top center;
-    animation: unfold var(--mid) var(--spring);
+    animation: unfold var(--mid) var(--settle);
 }
 
 /* it reads as the box growing downwards, not a card dropping in */
@@ -876,12 +904,19 @@ button {
     width: 1rem;
     height: 0.8125rem;
     flex: none;
+    contain: strict;
 }
 
+/* the bars run for as long as something is playing, so they are the one
+   animation in the app that never stops. on height that is a layout pass every
+   frame for as long as the music is on; scaled from the floor it is the same
+   picture handed to the compositor once. */
 .eq i {
     width: 0.125rem;
+    height: 100%;
     border-radius: 0.0625rem;
     background: var(--accent);
+    transform-origin: 50% 100%;
     animation: eq 0.9s ease-in-out infinite;
 }
 
@@ -893,8 +928,8 @@ button {
 .eq i:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes eq {
-    0%, 100% { height: 30%; }
-    50% { height: 100%; }
+    0%, 100% { transform: scaleY(0.3); }
+    50% { transform: scaleY(1); }
 }
 
 .track-meta {
@@ -1006,9 +1041,12 @@ button {
     font: inherit;
     text-align: left;
     cursor: pointer;
-    /* the grid deals itself out rather than appearing all at once */
+    /* the grid deals itself out rather than appearing all at once, but only for
+       as long as there is a screen left to deal onto: uncapped, a library of two
+       hundred covers spends the better part of five seconds arriving, and the
+       ones past the fold are animating where nobody is looking */
     animation: rise 0.5s var(--spring) backwards;
-    animation-delay: calc(var(--i, 0) * 24ms);
+    animation-delay: calc(min(var(--i, 0), 16) * 24ms);
 }
 
 .album-cover {
@@ -1614,7 +1652,7 @@ button.badge:disabled {
     padding: 0.375rem;
     border-radius: 1rem;
     transform-origin: top left;
-    animation: menu-in 0.26s var(--spring);
+    animation: menu-in 0.26s var(--settle);
 }
 
 /* it scales out of the point that was clicked */
@@ -1984,7 +2022,7 @@ button.badge:disabled {
     width: min(22rem, 80vw);
     padding: 1.25rem;
     border-radius: 1.25rem;
-    animation: sheet 0.42s var(--spring);
+    animation: sheet 0.42s var(--settle);
 }
 
 /* it comes up like an iOS sheet: from below, slightly small, and settles */
@@ -2126,7 +2164,7 @@ button.badge:disabled {
     padding: 0.375rem;
     border-radius: 1rem;
     transform-origin: top right;
-    animation: menu-in 0.26s var(--spring);
+    animation: menu-in 0.26s var(--settle);
 }
 
 .filter-label {
@@ -2184,6 +2222,11 @@ button.badge:disabled {
     padding: 0.4375rem 0.625rem;
     border-radius: 0.875rem;
     cursor: pointer;
+    /* the list deals itself out the way the card grid does, and stops counting
+       after the first screenful so a long playlist does not spend a second and
+       a half arriving */
+    animation: rise 0.42s var(--spring) backwards;
+    animation-delay: calc(min(var(--i, 0), 14) * 18ms);
     transition:
         background var(--fast) ease,
         transform var(--fast) var(--spring);
@@ -2801,7 +2844,7 @@ button.badge:disabled {
         inset 0 1px 0 var(--specular),
         var(--shadow);
     transform-origin: bottom right;
-    animation: aura-in 0.26s var(--spring);
+    animation: aura-in 0.26s var(--settle);
 }
 
 @keyframes aura-in {
@@ -2895,7 +2938,7 @@ button.badge:disabled {
     /* the y in the style attribute is already the edge it should touch */
     transform: translate(-50%, -100%);
     transform-origin: bottom center;
-    animation: tip-in 0.2s var(--spring);
+    animation: tip-in 0.2s var(--settle);
 }
 
 .tip.below {
@@ -3195,6 +3238,80 @@ button.badge:disabled {
     color: var(--text-dim);
     font-size: 0.6875rem;
     line-height: 1.4;
+}
+
+/* ---------- leaving ---------- */
+
+/* everything that floats over the app used to arrive on a spring and then be
+   gone between two frames, because the element it was drawn from stops being
+   rendered the moment the state clears. usePresence keeps it for one more beat
+   with .closing on it, and these are what plays in that beat: the same move as
+   the way in, run backwards, faster, and without the ring - a thing being
+   dismissed should not look like a thing arriving. */
+
+/* nothing on the way out is clickable: the state behind it is already gone */
+.closing {
+    pointer-events: none;
+}
+
+.context-menu.closing,
+.filter-menu.closing,
+.aura-menu.closing {
+    animation: menu-out var(--quick) var(--exit) forwards;
+}
+
+@keyframes menu-out {
+    to {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+}
+
+/* the aura menu is pinned by a translate, so its exit has to carry it too */
+.aura-menu.closing {
+    animation-name: aura-out;
+}
+
+@keyframes aura-out {
+    to {
+        opacity: 0;
+        transform: translate(-100%, -100%) scale(0.96);
+    }
+}
+
+.overlay.closing {
+    animation: fade-out var(--quick) var(--exit) forwards;
+}
+
+@keyframes fade-out {
+    to {
+        opacity: 0;
+    }
+}
+
+/* the sheet goes back down the way it came up */
+.overlay.closing .dialog {
+    animation: sheet-out 0.24s var(--exit) forwards;
+}
+
+@keyframes sheet-out {
+    to {
+        opacity: 0;
+        transform: translateY(0.75rem) scale(0.97);
+    }
+}
+
+/* the results fold back into the bar rather than blinking out of it */
+.search-drop.closing {
+    animation: unfold-out 0.2s var(--exit) forwards;
+    pointer-events: none;
+}
+
+@keyframes unfold-out {
+    to {
+        opacity: 0;
+        transform: scaleY(0.6);
+    }
 }
 
 /* ---------- motion, opted out ---------- */
