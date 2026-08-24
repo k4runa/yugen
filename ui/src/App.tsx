@@ -178,6 +178,68 @@ const artist_tag = (meta?: string[]) => meta?.[1] || 'Unknown artist'
 const album_tag = (meta?: string[]) => meta?.[2] || 'Unknown album'
 const group_key = (tag: string) => tag.trim() || 'Unknown'
 
+// the eleven characters youtube names a video by, which yt-dlp leaves on the end
+// of the file name - and the file name is what a title falls back to when the
+// download arrived carrying no tags at all
+const VIDEO_ID = /\s*\[[\w-]{11}\]\s*$/
+
+// the words a video carries that a song does not. a bracket only comes off when
+// one of them is inside it, which leaves '(feat. ...)' and every other bracket
+// that is genuinely part of the title where it is.
+const VIDEO_NOISE =
+    /\s*[([][^()[\]]*\b(?:official|lyrics?|audio|video|visuali[sz]er|remaster(?:ed)?|hd|hq|4k|m\/?v)\b[^()[\]]*[)\]]/gi
+
+// what a channel is called rather than what the band is: yt-dlp fills the artist
+// tag from the uploader, and an uploader is the name with 'Official' after it,
+// the auto-generated '- Topic' feed, or a vevo account
+const CHANNEL = /\s*(?:-\s*topic|official|vevo)\s*$/i
+
+// 'Artist - Song', the way a video is titled
+const TITLE_SPLIT = /^(.+?)\s+[-\u2013\u2014]\s+(.+)$/
+
+// a video title quotes the name of the song inside it, and the quotes belong to
+// the video. only a title wrapped in them end to end is unwrapped, so 'Don't'
+// and 'Rock 'n' Roll' keep every mark they were written with.
+const QUOTED = /^["'\u2018\u201c](.+)["'\u2019\u201d]$/
+
+// where the tag lists everyone who played, last.fm is holding the first name only
+const asked_artist = (tag: string) => tag.split(',')[0].replace(CHANNEL, '').trim()
+
+/*
+ * The two names to ask about, out of the two on the file.
+ *
+ * Neither tag can be taken as given, because neither was written by anyone who
+ * had a music library in mind: yt-dlp puts the video's title in one and the
+ * channel's name in the other, so a download arrives as 'Girlfriends' playing
+ * 'Girlfriends - Untitled #3', or as 'Don Giovanni' - the label - playing
+ * 'LSD and the Search for God - "Starting Over"'. Neither last.fm nor lrclib
+ * knows a song by either of those names.
+ *
+ * So the video's dressing comes off, and then the dash in the title decides:
+ *
+ *   - nothing in front of it that reads as an artist, and the tag stands.
+ *   - the tag repeated in front of it, and the repeat is what comes off.
+ *   - something else in front of it, and that is taken over the tag. What sits
+ *     in front of a dash in a video's title is the artist far more often than a
+ *     channel name is, and a title that keeps its dash is one last.fm has never
+ *     heard of anyway - so there is nothing being given up by guessing here.
+ */
+function asked(title: string, artist: string) {
+    const track = title.replace(VIDEO_ID, '').replace(VIDEO_NOISE, '').trim()
+    // the stand-in a missing tag falls into is not a name to go looking for
+    const named = artist === 'Unknown artist' ? '' : asked_artist(artist)
+
+    const bare = (name: string) => name.trim().replace(QUOTED, '$1').trim()
+
+    const split = TITLE_SPLIT.exec(track)
+    if (!split) return { artist: named, track: bare(track) || title }
+
+    const [, front, rest] = split
+    const repeated = front.trim().toLowerCase() === named.toLowerCase()
+
+    return { artist: repeated ? named : front.trim(), track: bare(rest) }
+}
+
 // right-click targets: a track, a playlist in the sidebar, or the sidebar itself
 type MenuTarget =
     | { kind: 'song'; song: string }
@@ -398,9 +460,117 @@ function as_similar(answer: string): SimilarTrack[] {
     }
 }
 
+/*
+ * The one url out of a track.getInfo answer, read here for the same reason
+ * as_similar is: what the backend hands over is last.fm's own reply, whole.
+ *
+ * What a track page carries is the album's cover rather than the track's, at
+ * the largest size offered, and every step down to it is allowed to be missing
+ * - a track last.fm knows by name but has no release for has no picture
+ * either, which reads the same as an answer that never arrived.
+ */
+function as_cover(answer: string): string {
+    if (!answer) return ''
+
+    try {
+        const images = JSON.parse(answer)?.track?.album?.image
+        if (!Array.isArray(images)) return ''
+
+        return images.find((i) => i?.size === 'extralarge')?.['#text'] ?? ''
+    } catch {
+        return ''
+    }
+}
+
+/* ---------- what last.fm keeps on a track ---------- */
+
+// more than four reads as a wall rather than as a description of the track
+const TAGS = 4
+
+// the parts of a track.getInfo answer the card in front of the player shows.
+// every one of them is optional: last.fm answers for a track it barely knows
+// with little more than the name it was asked about.
+type TrackInfo = {
+    album: string
+    tags: string[]
+    listeners: number
+    playcount: number
+    // out of the wiki entry, which dates the release rather than the writing
+    year: string
+    summary: string
+}
+
+const ENTITIES: Record<string, string> = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    '#39': "'",
+    nbsp: ' ',
+}
+
+// last.fm writes its wiki entries as html and closes every one of them with a
+// link back to its own page for the track. Neither belongs in a paragraph here,
+// so the link goes first - trailing full stop and all - and what is left of the
+// markup is unwrapped around what it was wrapping.
+function as_prose(html: string) {
+    return html
+        .replace(/<a\b[^>]*>[\s\S]*?<\/a>\.?/gi, '')
+        .replace(/<[^>]*>/g, '')
+        .replace(/&(#?\w+);/g, (whole, name: string) => ENTITIES[name] ?? whole)
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+/*
+ * One track.getInfo answer, read down to the handful of fields the card shows.
+ *
+ * Every step is reached for rather than assumed: the same endpoint answers with
+ * a wiki and a tag list for a track it has an entry for, with a bare name and a
+ * play count for one it does not, and with an error object for one it has never
+ * heard of. None of the three is worth failing the card over, so anything that
+ * is not there simply does not appear on it.
+ */
+function as_info(answer: string): TrackInfo | null {
+    if (!answer) return null
+
+    try {
+        const track = JSON.parse(answer)?.track
+        if (!track) return null
+
+        // a track carrying one tag has it handed over as an object rather than
+        // as a list of one, which is the only shape surprise in the answer
+        const listed = track.toptags?.tag
+        const tags: string[] = (Array.isArray(listed) ? listed : listed ? [listed] : [])
+            .map((tag: { name?: string }) => tag?.name)
+            .filter((name: unknown): name is string => typeof name === 'string' && !!name)
+
+        const published: string = track.wiki?.published ?? ''
+
+        return {
+            album: typeof track.album?.title === 'string' ? track.album.title : '',
+            tags: tags.slice(0, TAGS),
+            listeners: Number(track.listeners) || 0,
+            playcount: Number(track.playcount) || 0,
+            year: published.match(/\b(?:19|20)\d{2}\b/)?.[0] ?? '',
+            summary: as_prose(track.wiki?.summary ?? ''),
+        }
+    } catch {
+        return null
+    }
+}
+
+// seven figures of listeners is a number nobody reads a digit of: what the line
+// is for is the size of the thing, so the locale's own short form is what goes in
+const counted = new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+})
+
 // the one grey star last.fm hands back for everything it has no picture for.
-// get_similar already drops it on the way over; get_track_cover does not, and
-// that is the call nearly every card ends up going through.
+// get_similar already drops it on the way over; a track's own page does not,
+// and that is the call nearly every card ends up going through.
 const NO_PICTURE = '2a96cbd8b46e442fc41c2b86b821562f'
 
 const picture = (url?: string) => {
@@ -516,7 +686,7 @@ type Bridge = {
     remove_from_playlist(playlist: string, name: string): Promise<boolean>
     set_volume(volume: number) : Promise<void>
     load_volume() : Promise<number>
-    get_file_path(): Promise<string>
+    get_music_dir(): Promise<string>
     mpris_track(
         title: string,
         artist: string,
@@ -549,16 +719,17 @@ type Bridge = {
     // what is being asked about, the limit is per track, and an answer of ''
     // means the far side had no api key to ask with.
     get_similar(file_path: string, limit: number): Promise<string>
-    // the artwork last.fm carries on a track's own page, as a url. it is the
-    // album's picture rather than the track's, and unlike the similar list it
-    // is handed over as it came - placeholder and all, see picture().
-    get_track_cover(artist: string, track_name: string): Promise<string>
+    // everything last.fm carries on one track's page, as the json text it
+    // answered with. two things read it: the shelf, which wants the artwork out
+    // of it and nothing else (as_cover, and it arrives placeholder and all - see
+    // picture()), and the card in front of the player, which wants the rest.
+    get_info(artist: string, track_name: string): Promise<string>
 }
 
 // what get_similar answers with, once the text has been read. the backend
 // rebuilds each entry rather than passing last.fm's own on, so the image is
 // blank wherever it only had the placeholder - which is most of them, and what
-// get_track_cover is for. the closeness is whatever json it was written as.
+// the second look is for. the closeness is whatever json it was written as.
 type SimilarTrack = {
     name: string
     artist: string
@@ -631,7 +802,7 @@ const mpris = (call: () => Promise<void>) => {
 let music_path = ''
 async function music_dir() {
     if (!music_path) {
-        const path = await bridge().get_file_path()
+        const path = await bridge().get_music_dir()
         music_path = path.endsWith('/') ? path : `${path}/`
     }
 
@@ -772,6 +943,31 @@ function parse_lyrics(raw: string): Line[] | null {
     if (lines.length < 2) return null
 
     return lines.sort((a, b) => a.at - b.at)
+}
+
+// a sheet keeps the line in force centred inside its own box, without dragging
+// whatever the box sits in around it, so scrollIntoView is not an option here.
+//
+// both places the sheet is shown stay mounted while hidden, and centring a line
+// nobody can see is layout work for nothing: 'showing' is what says which of the
+// two is worth the scroll, and the other catches up when it comes back.
+function useLineFollow(
+    box: React.RefObject<HTMLDivElement | null>,
+    line: number,
+    showing: boolean,
+) {
+    useEffect(() => {
+        const node = box.current
+        if (!node || line < 0 || !showing) return
+
+        const row = node.children[line] as HTMLElement | undefined
+        if (!row) return
+
+        node.scrollTo({
+            top: row.offsetTop - node.clientHeight / 2 + row.offsetHeight / 2,
+            behavior: 'smooth',
+        })
+    }, [box, line, showing])
 }
 
 // the backend is polled once a second, far too coarse to move a progress bar or
@@ -1277,6 +1473,18 @@ export default function App() {
     // sheet that has not come back yet.
     const [sheet_for, set_sheet_for] = useState<{ song: string; text: string } | null>(null)
 
+    // the card the player bar opens into. what last.fm keeps on the track is held
+    // exactly the way the sheet is - by the track it belongs to - so an answer
+    // that lands after the song has changed is not read as this one's.
+    const [info_for, set_info_for] = useState<{ song: string; info: TrackInfo | null } | null>(
+        null,
+    )
+    const [info_open, set_info_open] = useState(false)
+    // the card's own 'add to', anchored under the button rather than at a cursor
+    const [info_menu, set_info_menu] = useState<{ x: number; bottom: number } | null>(null)
+    // the card has two faces and the sheet is the one worth turning to
+    const [info_face, set_info_face] = useState<'about' | 'lyrics'>('about')
+
     const [menu, set_menu] = useState<Menu | null>(null)
     const [submenu, set_submenu] = useState(false)
     const [filters, set_filters] = useState(false)
@@ -1546,10 +1754,11 @@ export default function App() {
         if (!current) return
 
         const song = current
+        const ask = asked(title_of(song), artist_of(song))
         let cancelled = false
 
         bridge()
-            .get_lyrics(title_of(song), artist_of(song))
+            .get_lyrics(ask.track, ask.artist)
             .then((raw) => !cancelled && set_sheet_for({ song, text: raw ?? '' }))
             .catch(() => !cancelled && set_sheet_for({ song, text: '' }))
 
@@ -1558,6 +1767,59 @@ export default function App() {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps -- metadata_map feeds the two titles
     }, [current, metadata_map])
+
+    // only while the card is up. nothing else on screen reads any of this, and
+    // asking for every track that comes up would be a request per track nobody
+    // opened - info.json on the far side is what makes the second look free.
+    useEffect(() => {
+        if (!info_open || !current) return
+
+        const song = current
+        const ask = asked(title_of(song), artist_of(song))
+        let cancelled = false
+
+        bridge()
+            .get_info(ask.artist, ask.track)
+            .then((raw) => !cancelled && set_info_for({ song, info: as_info(raw ?? '') }))
+            .catch(() => !cancelled && set_info_for({ song, info: null }))
+
+        return () => {
+            cancelled = true
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- metadata_map feeds the two names
+    }, [info_open, current, metadata_map])
+
+    // the overlay takes the click that closes it, so escape is all that is left.
+    // the list of playlists is a menu, though, and a menu closes on both.
+    useEffect(() => {
+        if (!info_open) return
+
+        const on_key = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return
+
+            if (info_menu) set_info_menu(null)
+            else close_info()
+        }
+
+        window.addEventListener('keydown', on_key)
+
+        return () => window.removeEventListener('keydown', on_key)
+    }, [info_open, info_menu])
+
+    useEffect(() => {
+        if (!info_menu) return
+
+        const close = () => set_info_menu(null)
+
+        window.addEventListener('click', close)
+        window.addEventListener('resize', close)
+
+        return () => {
+            window.removeEventListener('click', close)
+            window.removeEventListener('resize', close)
+        }
+    }, [info_menu])
+
 
     const active_tip = useTip()
     const tip_box = useRef<HTMLDivElement>(null)
@@ -1774,7 +2036,7 @@ export default function App() {
     async function fetch_songs() {
         set_loading(true)
 
-        // anything in here can throw - an old backend with no get_file_path
+        // anything in here can throw - an old backend with no get_music_dir
         // binding, a music folder that is not there - and without the catch the
         // spinner below simply never stops, which says nothing about why
         try {
@@ -2344,9 +2606,11 @@ export default function App() {
                     const image =
                         track.image ||
                         picture(
-                            await bridge()
-                                .get_track_cover(track.artist, track.title)
-                                .catch(() => ''),
+                            as_cover(
+                                await bridge()
+                                    .get_info(track.artist, track.title)
+                                    .catch(() => ''),
+                            ),
                         )
 
                     if (image) filled.push({ ...track, image })
@@ -3092,6 +3356,19 @@ export default function App() {
     }
 
     const song_context = (name: string) => context({ kind: 'song', song: name })
+
+    // it opens on what the track is rather than on where the last one was left:
+    // the sheet is one button away, and this is a different song
+    function open_info() {
+        set_info_face('about')
+        set_info_open(true)
+    }
+
+    // the menu hangs off the card and does not outlive it
+    function close_info() {
+        set_info_menu(null)
+        set_info_open(false)
+    }
 
     function open_dialog(next: Dialog) {
         set_draft(next.playlist)
@@ -3847,6 +4124,43 @@ export default function App() {
         return rank(a) !== rank(b) ? rank(a) - rank(b) : a.localeCompare(b)
     })
 
+    // everywhere a track can be put. the right-click submenu opens it and so
+    // does the button on the card, and neither of them wants a list of its own.
+    const playlist_targets = (song: string) => (
+        <>
+            <button onClick={() => toggle_like(song)}>
+                <Icon d={ICONS.heart} size={15} fill={liked.has(song)} />
+                <span className='ellipsis'>Liked Songs</span>
+                {liked.has(song) && <Icon d={ICONS.check} size={14} />}
+            </button>
+
+            {playlist_names.length > 0 && <div className='context-sep' />}
+
+            {playlist_names.map((name) => {
+                const inside = playlists[name].includes(song)
+
+                return (
+                    <button
+                        key={name}
+                        onClick={() =>
+                            inside ? remove_from_playlist(name, song) : add_to_playlist(name, song)
+                        }
+                    >
+                        <Icon d={ICONS.playlist} size={15} />
+                        <span className='ellipsis'>{name}</span>
+                        {inside && <Icon d={ICONS.check} size={14} />}
+                    </button>
+                )
+            })}
+
+            <div className='context-sep' />
+            <button onClick={() => new_playlist(song)}>
+                <Icon d={ICONS.plus} size={15} />
+                <span className='ellipsis'>New playlist</span>
+            </button>
+        </>
+    )
+
     // a playlist shows the sleeve it was given. one that has never been given
     // one still borrows the cover of the first track inside it that has one, so
     // the sidebar reads the same as it always did until somebody picks a photo.
@@ -3982,6 +4296,11 @@ export default function App() {
     const awaiting_lyrics = !!current && sheet === undefined
     const timed = useMemo(() => (sheet ? parse_lyrics(sheet) : null), [sheet])
 
+    // and the same reading for the card: an answer is this track's while it names
+    // this track, and undefined until one has arrived at all
+    const info = info_for?.song === current ? info_for.info : undefined
+    const awaiting_info = info === undefined
+
     // the bar and the clock are written straight into these two nodes every frame.
     // the lyric line is the only thing the count moves that needs a render, and it
     // turns over a few times a minute rather than a few times a second.
@@ -4009,24 +4328,13 @@ export default function App() {
         if (index !== line_now) set_line_now(index)
     })
 
+    // the sheet is shown in two places and only ever one of them at a time: the
+    // rail down the side, and the card turned to its second face
     const lyric_box = useRef<HTMLDivElement>(null)
+    const card_box = useRef<HTMLDivElement>(null)
 
-    // the panel keeps the current line centred itself, without dragging the rail
-    // around it, so scrollIntoView is not an option here
-    useEffect(() => {
-        const box = lyric_box.current
-        // the panel stays in the dom while hidden, and centring a line nobody can
-        // see is layout work for nothing - it catches up when the rail comes back
-        if (!box || line_now < 0 || !rail_open) return
-
-        const line = box.children[line_now] as HTMLElement | undefined
-        if (!line) return
-
-        box.scrollTo({
-            top: line.offsetTop - box.clientHeight / 2 + line.offsetHeight / 2,
-            behavior: 'smooth',
-        })
-    }, [line_now, rail_open])
+    useLineFollow(lyric_box, line_now, rail_open)
+    useLineFollow(card_box, line_now, info_open && info_face === 'lyrics')
 
     async function seek_to(seconds: number) {
         await bridge().seek(seconds)
@@ -4034,6 +4342,234 @@ export default function App() {
 
         mpris(() => bridge().mpris_seeked(seconds))
     }
+
+    // the sheet reads three ways and is shown in two places, so the three are
+    // written once and handed whichever box is going to do the scrolling
+    const sheet_body = (box: React.RefObject<HTMLDivElement | null>) =>
+        timed ? (
+            <div className='lyric-lines' ref={box}>
+                {timed.map((line, i) => (
+                    <button
+                        key={`${line.at}-${i}`}
+                        className={`lyric${
+                            i === line_now
+                                ? ' now'
+                                : Math.abs(i - line_now) === 1
+                                  ? ' near'
+                                  : ''
+                        }${line.text ? '' : ' rest'}`}
+                        {...tip('Jump to this line')}
+                        onClick={() => seek_to(line.at)}
+                    >
+                        {line.text || '\u266a'}
+                    </button>
+                ))}
+            </div>
+        ) : sheet ? (
+            // plain lyrics carry no timing, so there is nothing to follow along
+            // with and nothing to click
+            <p className='lyric-plain'>{sheet}</p>
+        ) : (
+            <p className='muted lyric-empty'>
+                {awaiting_lyrics ? 'Looking for lyrics...' : 'No lyrics for this track.'}
+            </p>
+        )
+
+    /*
+     * The card the player bar opens into: the record on the left, everything
+     * known about what is on it on the right.
+     *
+     * Only what is actually known goes on it. The file's own tags are the part
+     * that is always there, last.fm fills in the rest when it has an entry for
+     * the track, and a row it cannot answer for is left off the card rather than
+     * printed as a blank - which is why the stats are written out one at a time
+     * instead of walked over as a list.
+     */
+    function track_card(song: string) {
+        const is_liked = liked.has(song)
+        const starred = is_favorite(song)
+        // the tag off the file wins: it is what the library is sorted by, and
+        // last.fm's title for the release is only worth borrowing in its absence
+        const album = album_of(song)
+        const on_sleeve = album === 'Unknown album' && info?.album ? info.album : album
+
+        return (
+            <div className='overlay' onClick={close_info}>
+                <div className='dialog info-card' onClick={(e) => e.stopPropagation()}>
+                    <button
+                        className='icon-btn tiny info-close'
+                        {...tip('Close')}
+                        onClick={close_info}
+                    >
+                        <Icon d={ICONS.close} size={15} />
+                    </button>
+
+                    {/* the record and everything done to it, down one side: the
+                        sleeve at the top and the buttons under it, which is the
+                        order they are reached in */}
+                    <div className='info-side'>
+                        <div className='info-art'>
+                            {cover(song, 'info-cover')}
+                            {/* the whole sleeve is the button: a heart tucked
+                                into the corner of a picture this size is a
+                                target nobody aims at, and the picture is what
+                                is being liked */}
+                            <button
+                                className={`art-like${is_liked ? ' liked' : ''}`}
+                                {...tip(
+                                    is_liked ? 'Remove from liked songs' : 'Add to liked songs',
+                                )}
+                                onClick={() => toggle_like(song)}
+                            >
+                                <Icon d={ICONS.heart} size={64} fill={is_liked} />
+                            </button>
+                        </div>
+
+                        <div className='info-actions'>
+                            <button className='pill-btn primary' onClick={toggle_pause}>
+                                <Icon
+                                    d={paused ? ICONS.play : ICONS.pause}
+                                    size={15}
+                                    fill={paused}
+                                />
+                                {paused ? 'Play' : 'Pause'}
+                            </button>
+                            <button
+                                className={`pill-btn${info_face === 'lyrics' ? ' on' : ''}`}
+                                onClick={() =>
+                                    set_info_face(info_face === 'lyrics' ? 'about' : 'lyrics')
+                                }
+                            >
+                                <Icon d={ICONS.playlist} size={15} />
+                                {info_face === 'lyrics' ? 'About' : 'Lyrics'}
+                            </button>
+                            <button
+                                className={`pill-btn${starred ? ' on' : ''}`}
+                                onClick={() => toggle_favorite(song)}
+                            >
+                                <Icon d={ICONS.star} size={15} fill={starred} />
+                                {starred ? 'Favorited' : 'Favorite'}
+                            </button>
+                            {/* the list of playlists is the one the right-click
+                                menu offers, hung under the button instead of at
+                                a cursor. the click must not reach the window, or
+                                the listener that dismisses it fires on the way. */}
+                            <button
+                                className={`pill-btn${info_menu ? ' on' : ''}`}
+                                {...tip('Add to a playlist')}
+                                onClick={(e) => {
+                                    e.stopPropagation()
+
+                                    if (info_menu) return set_info_menu(null)
+
+                                    const rect = e.currentTarget.getBoundingClientRect()
+
+                                    // measured off the top of the button and
+                                    // grown upwards: the card's last button has
+                                    // no room under it, and a list that covers
+                                    // the thing that opened it reads as a slip
+                                    set_info_menu({
+                                        x: Math.min(rect.left, window.innerWidth - 220),
+                                        bottom: Math.max(window.innerHeight - rect.top + 6, 8),
+                                    })
+                                }}
+                            >
+                                <Icon d={ICONS.plus} size={15} />
+                                Add to
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className='info-body'>
+                        <div className='info-head'>
+                            <h3 className='info-title'>{title_of(song)}</h3>
+                            <div className='info-artist ellipsis'>{artist_of(song)}</div>
+
+                            {!!info?.tags.length && (
+                                <div className='info-tags'>
+                                    {info.tags.map((tag) => (
+                                        <span key={tag} className='info-tag'>
+                                            {tag}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className='info-line'>
+                                {[
+                                    length_of(song) ? format_time(length_of(song)) : '',
+                                    info?.year,
+                                    song === current && !paused ? 'Playing' : '',
+                                ]
+                                    .filter(Boolean)
+                                    .join(' \u00b7 ')}
+                            </div>
+                        </div>
+
+                        <div className='info-face'>
+                            {info_face === 'lyrics' ? (
+                                sheet_body(card_box)
+                            ) : (
+                                <>
+                                    <dl className='info-stats'>
+                                        <dt>Album</dt>
+                                        <dd className='ellipsis'>{on_sleeve}</dd>
+
+                                        {!!info?.listeners && (
+                                            <>
+                                                <dt>Listeners</dt>
+                                                <dd>{counted.format(info.listeners)}</dd>
+                                            </>
+                                        )}
+
+                                        {!!info?.playcount && (
+                                            <>
+                                                <dt>Scrobbles</dt>
+                                                <dd>{counted.format(info.playcount)}</dd>
+                                            </>
+                                        )}
+
+                                        <dt>Added</dt>
+                                        <dd>{format_date(added_of(song))}</dd>
+                                    </dl>
+
+                                    {/* whatever is written about the track,
+                                        given the whole of what is left under
+                                        the rule and set in the middle of it -
+                                        three lines pinned to the top of a space
+                                        this tall read as something that failed
+                                        to finish loading */}
+                                    <div className='info-prose'>
+                                        {awaiting_info ? (
+                                            // three lines of nothing while the
+                                            // answer is out: the space has to
+                                            // hold something, and it is a
+                                            // paragraph that is coming
+                                            <div className='info-lines' aria-hidden>
+                                                <span />
+                                                <span />
+                                                <span />
+                                            </div>
+                                        ) : info?.summary ? (
+                                            <p className='info-summary'>{info.summary}</p>
+                                        ) : (
+                                            <p className='muted info-empty'>
+                                                Nothing to show for this one
+                                                <span aria-hidden>
+                                                    {'(\u00b4\uff65_\uff65`)'}
+                                                </span>
+                                            </p>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
     const view_title = selection ?? NAV.find((item) => item.id === view)?.label ?? 'Playlists'
 
     return (
@@ -4724,36 +5260,7 @@ export default function App() {
                                 {sheet && !timed && <span className='muted'>Not synced</span>}
                             </div>
 
-                            {timed ? (
-                                <div className='lyric-lines' ref={lyric_box}>
-                                    {timed.map((line, i) => (
-                                        <button
-                                            key={`${line.at}-${i}`}
-                                            className={`lyric${
-                                                i === line_now
-                                                    ? ' now'
-                                                    : Math.abs(i - line_now) === 1
-                                                      ? ' near'
-                                                      : ''
-                                            }${line.text ? '' : ' rest'}`}
-                                            {...tip('Jump to this line')}
-                                            onClick={() => seek_to(line.at)}
-                                        >
-                                            {line.text || '♪'}
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : sheet ? (
-                                // plain lyrics carry no timing, so there is nothing to
-                                // follow along with and nothing to click
-                                <p className='lyric-plain'>{sheet}</p>
-                            ) : (
-                                <p className='muted lyric-empty'>
-                                    {awaiting_lyrics
-                                        ? 'Looking for lyrics...'
-                                        : 'No lyrics for this track.'}
-                                </p>
-                            )}
+                            {sheet_body(lyric_box)}
                         </section>
                     )}
 
@@ -4823,6 +5330,15 @@ export default function App() {
                 )}
             </div>
 
+            {info_menu && current && (
+                <div
+                    className='context-menu info-menu'
+                    style={{ left: info_menu.x, bottom: info_menu.bottom }}
+                >
+                    {playlist_targets(current)}
+                </div>
+            )}
+
             {menu && (
                 <div className='context-menu' style={{ left: menu.x, top: menu.y }}>
                     {menu.kind === 'song' && (
@@ -4870,48 +5386,7 @@ export default function App() {
 
                                 {submenu && (
                                     <div className={`context-menu submenu${flip ? ' flip' : ''}`}>
-                                        <button onClick={() => toggle_like(menu.song)}>
-                                            <Icon
-                                                d={ICONS.heart}
-                                                size={15}
-                                                fill={liked.has(menu.song)}
-                                            />
-                                            <span className='ellipsis'>Liked Songs</span>
-                                            {liked.has(menu.song) && (
-                                                <Icon d={ICONS.check} size={14} />
-                                            )}
-                                        </button>
-
-                                        {playlist_names.length > 0 && (
-                                            <div className='context-sep' />
-                                        )}
-
-                                        {playlist_names.map((name) => {
-                                            const inside = playlists[name].includes(menu.song)
-
-                                            return (
-                                                <button
-                                                    key={name}
-                                                    onClick={() =>
-                                                        inside
-                                                            ? remove_from_playlist(name, menu.song)
-                                                            : add_to_playlist(name, menu.song)
-                                                    }
-                                                >
-                                                    <Icon d={ICONS.playlist} size={15} />
-                                                    <span className='ellipsis'>{name}</span>
-                                                    {inside && <Icon d={ICONS.check} size={14} />}
-                                                </button>
-                                            )
-                                        })}
-
-                                        <div className='context-sep' />
-                                        <button
-                                            onClick={() => new_playlist(menu.song)}
-                                        >
-                                            <Icon d={ICONS.plus} size={15} />
-                                            <span className='ellipsis'>New playlist</span>
-                                        </button>
+                                        {playlist_targets(menu.song)}
                                     </div>
                                 )}
                             </div>
@@ -5282,6 +5757,8 @@ export default function App() {
                 </div>
             )}
 
+            {info_open && current && track_card(current)}
+
             <div className='player'>
                 <div
                     className={`progress${seeking !== null ? ' dragging' : ''}`}
@@ -5301,11 +5778,21 @@ export default function App() {
                 >
                     {current ? (
                         <>
-                            {cover(current, '')}
-                            <div className='track-meta'>
-                                <div className='ellipsis'>{title_of(current)}</div>
-                                <div className='muted ellipsis'>{artist_of(current)}</div>
-                            </div>
+                            {/* the sleeve and the two lines are one target: both
+                                of them are the track, and the track is what the
+                                card is about. the heart stays outside it, since
+                                a like is not a way of asking about anything */}
+                            <button
+                                className='playing-open'
+                                {...tip('Track info')}
+                                onClick={open_info}
+                            >
+                                {cover(current, '')}
+                                <div className='track-meta'>
+                                    <div className='ellipsis'>{title_of(current)}</div>
+                                    <div className='muted ellipsis'>{artist_of(current)}</div>
+                                </div>
+                            </button>
                             {heart(current, 'static', 18)}
                         </>
                     ) : (

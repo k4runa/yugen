@@ -3478,3 +3478,393 @@ button.badge:disabled {
     flex: 1;
     justify-content: center;
 }
+
+/* ---------- the track card ---------- */
+
+/* the sleeve and the two lines in the player bar are one target. it is laid out
+   exactly as it was before it became a button, so the bar itself does not shift
+   when the card is wired up behind it. */
+.playing-open {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.playing-open img,
+.playing-open .placeholder {
+    transition:
+        transform var(--mid) var(--spring),
+        box-shadow var(--slow) ease;
+}
+
+.playing-open .track-meta > :first-child {
+    transition: color var(--fast) ease;
+}
+
+/* the sleeve lifts and the title takes the accent: enough to say the thing is
+   live without putting a button's edges into the bar */
+.playing-open:hover img,
+.playing-open:hover .placeholder {
+    transform: scale(1.05);
+}
+
+.playing-open:hover .track-meta > :first-child {
+    color: var(--accent);
+}
+
+.playing-open:active img,
+.playing-open:active .placeholder {
+    transform: scale(0.97);
+}
+
+/* wider than a dialog and laid out sideways: the record on the left at the size
+   a record is worth seeing at, and everything known about it on the right */
+.info-card {
+    position: relative;
+    flex-direction: row;
+    gap: 1.375rem;
+    width: min(46rem, 92vw);
+    /* a floor as well as a ceiling: the floor is what the sleeve and the four
+       buttons under it come to, and without it the card would also be as tall
+       as whatever last.fm happened to write - which is to say a different
+       height for every track */
+    min-height: min(33rem, 86vh);
+    max-height: min(40rem, 92vh);
+    padding: 1.375rem;
+}
+
+.info-close {
+    position: absolute;
+    top: 0.875rem;
+    right: 0.875rem;
+    z-index: 1;
+}
+
+.info-art {
+    position: relative;
+    flex: none;
+    width: 100%;
+}
+
+.info-cover {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 1rem;
+    object-fit: cover;
+    background: var(--skeleton);
+    box-shadow:
+        inset 0 1px 0 var(--specular),
+        0 1.25rem 2.5rem -1rem hsl(0 0% 4% / 0.5);
+}
+
+.info-cover.placeholder {
+    display: grid;
+    place-items: center;
+    color: var(--text-dim);
+    font-size: 2.75rem;
+}
+
+.info-side {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    flex: none;
+    width: clamp(12rem, 30vw, 16.5rem);
+}
+
+/* the sleeve leads and the buttons close: whatever slack the column has goes
+   between them rather than under the last button */
+.info-side .info-actions {
+    margin-top: auto;
+}
+
+/* the like covers the sleeve rather than sitting in a corner of it, and it is
+   not there until the pointer is - so what the card opens on is the artwork.
+   once the track is liked the heart stays, since that is the answer being kept. */
+.art-like {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: 1rem;
+    background: hsl(0 0% 4% / 0);
+    color: hsl(0 0% 100% / 0.95);
+    cursor: pointer;
+    opacity: 0;
+    transition:
+        opacity var(--mid) ease,
+        background var(--mid) ease;
+}
+
+/* thinner than the stroke every other icon is drawn at: at this size the app's
+   own weight reads as a marker pen rather than as a line */
+.art-like .ico {
+    stroke-width: 1.1;
+    filter: drop-shadow(0 0.125rem 0.5rem hsl(0 0% 0% / 0.55));
+    transition: transform var(--fast) var(--spring);
+}
+
+.info-art:hover .art-like,
+.art-like:focus-visible {
+    opacity: 1;
+    background: hsl(0 0% 4% / 0.42);
+}
+
+/* liked is the accent every other mark in the window is mixed from, which is the
+   record's own colour: the heart is lit by whatever is playing. it still only
+   comes up under the pointer - what the state is is already on the heart in the
+   player bar, and this one is a button rather than a badge. */
+.art-like.liked {
+    color: var(--accent);
+}
+
+.art-like.liked .ico {
+    filter: drop-shadow(0 0.125rem 0.5rem hsl(0 0% 0% / 0.55))
+        drop-shadow(0 0 1.5rem var(--accent-glow));
+    animation: pop 0.4s var(--pop);
+}
+
+.art-like:active .ico {
+    transform: scale(0.86);
+}
+
+.info-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.info-head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    /* the close button sits up here */
+    padding-right: 2rem;
+}
+
+.info-title {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 680;
+    letter-spacing: -0.032em;
+    line-height: 1.15;
+    text-wrap: balance;
+}
+
+.info-artist {
+    color: var(--text);
+    font-size: 0.875rem;
+    font-weight: 550;
+    opacity: 0.72;
+}
+
+.info-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3125rem;
+    margin-top: 0.125rem;
+}
+
+.info-tag {
+    padding: 0.1875rem 0.5rem;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--text-dim);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.info-line {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* the middle is the only part that moves: the title stays put above it and the
+   buttons stay put below it, however long the writing or the sheet turns out */
+.info-face {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+.info-face::-webkit-scrollbar {
+    width: 0;
+}
+
+/* what is written about the track gets everything under the rule, and sits in
+   the middle of it. a paragraph of three lines against the top of a space five
+   times its height reads as a page that stopped halfway. */
+.info-prose {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+    padding: 0.5rem 0;
+    text-align: center;
+}
+
+.info-summary {
+    margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.62;
+    text-wrap: pretty;
+    user-select: text;
+}
+
+/* the one line a track with no entry gets. the space around it is the prose
+   block's, and being placed in the middle of it is what makes it read as the
+   whole answer rather than as a row that failed to load. */
+.info-empty {
+    margin: 0;
+}
+
+/* the kaomoji is punctuation doing a face's job, and the tracking the rest of
+   the app is set in closes it up */
+.info-empty span {
+    letter-spacing: 0;
+    opacity: 0.85;
+}
+
+/* in the rail the sheet is bounded by a height of its own; here the face is what
+   bounds it, so it gives that height back and keeps the scrolling */
+.info-face .lyric-lines,
+.info-face .lyric-plain {
+    flex: 1;
+    max-height: none;
+    min-height: 0;
+}
+
+.info-face .lyric-empty {
+    margin: 0;
+}
+
+.info-stats {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.375rem 1.25rem;
+    margin: 0;
+    padding-bottom: 0.875rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.75rem;
+}
+
+.info-stats dt {
+    color: var(--text-dim);
+    font-weight: 550;
+}
+
+.info-stats dd {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+/* three lines of nothing while the answer is still out: the face has to hold
+   something, and a spinner over a card this size reads as a stall */
+.info-lines {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+}
+
+.info-lines span {
+    width: 100%;
+    height: 0.5rem;
+    border-radius: 0.25rem;
+    background: var(--skeleton);
+    animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.info-lines span:nth-child(2) {
+    width: 92%;
+    animation-delay: 0.1s;
+}
+
+.info-lines span:last-child {
+    width: 54%;
+    animation-delay: 0.2s;
+}
+
+.info-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.info-actions .pill-btn {
+    padding: 0.625rem 0.875rem;
+}
+
+/* the same list the right-click menu offers, hung under the button that opened
+   it. a library with more playlists than the card is tall scrolls it. */
+.info-menu {
+    z-index: 31;
+    max-height: min(22rem, 60vh);
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+.info-menu::-webkit-scrollbar {
+    width: 0;
+}
+
+/* the accent is a hair off the text in the dark palette, so what says a toggle
+   is on is the edge going from a hairline to a lit one - and the tint is laid
+   over the glass rather than in place of it, which would only dim the button */
+.pill-btn.on {
+    border-color: var(--accent);
+    background:
+        linear-gradient(var(--accent-soft), var(--accent-soft)),
+        var(--glass-inset);
+    color: var(--accent);
+}
+
+/* a window too narrow to hold the record beside the writing stacks them instead,
+   which is the same card read from the top down */
+@media (max-width: 44rem) {
+    .info-card {
+        flex-direction: column;
+        min-height: auto;
+        max-height: 92vh;
+    }
+
+    .info-side {
+        width: 100%;
+    }
+
+    .info-art {
+        align-self: center;
+        width: min(13rem, 60vw);
+    }
+
+    .info-head {
+        padding-right: 0;
+        text-align: center;
+    }
+
+    .info-tags {
+        justify-content: center;
+    }
+}

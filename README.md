@@ -110,7 +110,7 @@ Or install it system-wide, which also drops in the desktop entry and icons:
 sudo cmake --install build
 ```
 
-The music folder comes from the backend's `get_file_path` binding, which points
+The music folder comes from the backend's `get_music_dir` binding, which points
 at `~/Music` and creates it if it is not there. Playlists, liked songs and the
 last.fm key live in `~/.config/yugen/`.
 

@@ -18,7 +18,7 @@ namespace yugen
      using json = nlohmann::json;
 
      // ~/.config/yugen - playlists.json and liked_songs.json live here
-     std::string data_dir();
+     std::string config_dir();
 
      /*
       * Discord rich presence, over the rpc socket the discord client listens on.
@@ -146,7 +146,7 @@ namespace yugen
      /*
       * MusicManager is the on-disk library: playlists.json (a name -> array of
       * file names object) and liked_songs.json (a flat array), both under
-      * data_dir(). Every call reads the whole file, edits the json in memory and
+      * config_dir(). Every call reads the whole file, edits the json in memory and
       * writes it back - the files are small enough that nothing is cached, which
       * keeps them correct if something else edits them between calls.
       */     
@@ -183,10 +183,10 @@ namespace yugen
                // json text rather than a structure - the ui parses it - and the
                // file is read for its tags, so it has to still be on disk
                static std::string get_similar(const std::string& file_path, const int limit);
-               // the second look for a picture, for the suggestions get_similar
-               // had none for - which is most of them
-               static std::string get_track_cover(const std::string& artist, const std::string& track_name);
-          
+               // the second look, for the suggestions get_similar had no
+               // picture for - which is most of them. last.fm's whole reply as
+               // json text, read on the ui side; answers are kept in info.json
+               static std::string get_info(const std::string& artist, const std::string& track_name);
           private:
                static bool save_playlists(const json& data);
                static json load_playlists();

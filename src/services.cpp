@@ -72,6 +72,9 @@ namespace yugen
           // every sheet lrclib has ever answered with, so the second run of the
           // player is not the first one again
           constexpr const char* LYRICS_FILE      = "/lyrics.json";
+          // and every answer last.fm has given about a track, for the same
+          // reason: a shelf drawn a second time asks for each card once
+          constexpr const char* INFO_FILE        = "/info.json";
           // the one grey star last.fm answers with for everything it has no
           // picture of, recognised by the hash in its url so that a suggestion
           // carrying nothing is handed over as carrying nothing
@@ -99,7 +102,7 @@ namespace yugen
           std::string API_KEY = env ? env : "";
 
           // the volume as it was last set, so the poll behind the slider does not
-          // read vol.txt off the disk several times a second
+          // read vol off the disk several times a second
           std::optional<float> cached_vol;
 
           // full path -> the tags read off that file. a scan asks about every
@@ -151,6 +154,14 @@ namespace yugen
           json lyrics_cache;
           bool lyrics_cache_loaded = false;
 
+          // and once more for what last.fm answers about a track, mirrored to
+          // info.json. what is kept is the whole reply rather than the picture
+          // read out of it: the reading happens on the ui side, and a card that
+          // comes to want more than a cover already has it here.
+          std::mutex info_mtx;
+          json info_cache;
+          bool info_cache_loaded = false;
+
           // lookups already in flight, so two publishes of the same track do not
           // both go out to the network
           std::set<std::string> cover_inflight;
@@ -167,7 +178,7 @@ namespace yugen
      // Where everything the player owns is kept. Read out of the passwd entry
      // rather than $HOME so it stays right when the process is started by
      // something that does not set the environment, like a .desktop launcher.
-     std::string data_dir()
+     std::string config_dir()
      {
           passwd* p = getpwuid(getuid());
           return p ? std::string(p->pw_dir) + "/.config/yugen" : "";
@@ -320,7 +331,7 @@ namespace yugen
           lyrics_cache_loaded = true;
           lyrics_cache = json::object();
 
-          const std::string path = data_dir() + LYRICS_FILE;
+          const std::string path = config_dir() + LYRICS_FILE;
 
           if(!fs::exists(path)) return;
           
@@ -351,7 +362,7 @@ namespace yugen
      // What came back, written through to disk on the spot. The whole file goes
      // out again rather than the one entry: it is json, there is no appending to
      // it, and a sheet is only added when a track is played for the first time.
-     static void store_lyrics(const std::string& key, const std::string url)
+     static void store_lyrics(const std::string& key, const std::string& url)
      {
           std::lock_guard<std::mutex> lk(lyrics_mtx);
 
@@ -359,8 +370,59 @@ namespace yugen
 
           lyrics_cache[key] = url;
 
-          std::ofstream out(data_dir() + LYRICS_FILE);
+          std::ofstream out(config_dir() + LYRICS_FILE);
           if(out.is_open()) out << lyrics_cache.dump(4);
+
+     }
+
+     static void load_info_cache()
+     {
+          if(info_cache_loaded) return;
+
+          info_cache_loaded = true;
+          info_cache = json::object();
+
+          const std::string path = config_dir() + INFO_FILE;
+
+          if(!fs::exists(path)) return;
+          
+          std::ifstream f(path);
+          if(!f.is_open()) return;
+
+          const auto data = json::parse(f, nullptr, false);
+          if(!data.is_discarded() && data.is_object()) info_cache = data;
+     }
+
+     /*
+      * The answer already held for this track, if any. The outer optional says
+      * whether the track has been asked about at all, the string what came back
+      * - so a track last.fm had nothing to say about is an empty string here
+      * rather than a miss, and never goes out to the network a second time.
+      */
+     static std::optional<std::string> cached_info(const std::string& key)
+     {
+          std::lock_guard<std::mutex> lock(info_mtx);
+          
+          load_info_cache();
+          
+          if(!info_cache.contains(key)) return std::nullopt;
+
+          return info_cache.at(key).get<std::string>();
+     }
+
+     // What came back, written through to disk on the spot. The whole file goes
+     // out again rather than the one entry: it is json, there is no appending to
+     // it, and an entry is only added the first time a card is drawn for a track.
+     static void store_info(const std::string& key, const std::string& data)
+     {
+          std::lock_guard<std::mutex> lk(info_mtx);
+
+          load_info_cache();
+
+          info_cache[key] = data;
+
+          std::ofstream out(config_dir() + INFO_FILE);
+          if(out.is_open()) out << info_cache.dump(4);
 
      }
 
@@ -803,7 +865,7 @@ namespace yugen
      }
 
      // The slider writes here and the poll behind it reads load_volume(), so the
-     // two are kept in step through cached_vol: vol.txt is written for the next
+     // two are kept in step through cached_vol: vol is written for the next
      // launch rather than to be read back during this one.
      void SoundManager::set_volume(float volume)
      {
@@ -813,14 +875,14 @@ namespace yugen
                ma_sound_set_volume(&sound, volume);
           }
 
-          std::ofstream out(data_dir() + "/vol.txt");
+          std::ofstream out(config_dir() + "/vol");
           out << volume;
      }
 
      // What the player should come up at, and what the slider reads back while it
      // is running. The file is only ever touched on the first ask of a run -
      // after that set_volume() has already put the answer in cached_vol, and a
-     // slider being dragged would otherwise open vol.txt on every frame.
+     // slider being dragged would otherwise open vol on every frame.
      float SoundManager::load_volume()
      {
           if(cached_vol.has_value()) {
@@ -828,7 +890,7 @@ namespace yugen
                return cached_vol.value();
           }
 
-          std::string path = data_dir() + "/vol.txt";
+          std::string path = config_dir() + "/vol";
           if(fs::exists(path))
           {
                std::ifstream f(path);
@@ -852,7 +914,7 @@ namespace yugen
       */
      json MusicManager::load_playlists()
      {
-          const std::string path = data_dir() + PLAYLISTS_FILE;
+          const std::string path = config_dir() + PLAYLISTS_FILE;
 
           if(!fs::exists(path)) return json::object();
 
@@ -865,7 +927,7 @@ namespace yugen
      // Writes the object back out indented, so the file stays hand-editable.
      bool MusicManager::save_playlists(const json& data)
      {
-          const std::string path = data_dir() + PLAYLISTS_FILE;
+          const std::string path = config_dir() + PLAYLISTS_FILE;
 
           std::ofstream out(path);
           if(!out.is_open()) return false;
@@ -979,7 +1041,7 @@ namespace yugen
 
      std::vector<std::string> MusicManager::get_liked_songs()
      {
-          const std::string path = data_dir() + LIKED_SONGS_FILE;
+          const std::string path = config_dir() + LIKED_SONGS_FILE;
           if(!fs::exists(path)) return {};
 
           std::ifstream f(path);
@@ -995,7 +1057,7 @@ namespace yugen
 
      void MusicManager::like_song(const std::string& name)
      {
-          const std::string path = data_dir() + LIKED_SONGS_FILE;
+          const std::string path = config_dir() + LIKED_SONGS_FILE;
 
           json data = json::array();
 
@@ -1013,7 +1075,7 @@ namespace yugen
 
      void MusicManager::unlike_song(const std::string& name)
      {
-          const std::string path = data_dir() + LIKED_SONGS_FILE;
+          const std::string path = config_dir() + LIKED_SONGS_FILE;
 
           json data = json::array();
 
@@ -1098,7 +1160,7 @@ namespace yugen
           cover_cache_loaded = true;
           cover_cache = json::object();
 
-          const std::string path = data_dir() + COVERS_FILE;
+          const std::string path = config_dir() + COVERS_FILE;
           if(!fs::exists(path)) return;
 
           std::ifstream f(path);
@@ -1130,7 +1192,7 @@ namespace yugen
           cover_cache[key] = url;
           cover_inflight.erase(key);
 
-          std::ofstream out(data_dir() + COVERS_FILE);
+          std::ofstream out(config_dir() + COVERS_FILE);
           if(out.is_open()) out << cover_cache.dump(4);
      }
 
@@ -1341,7 +1403,7 @@ namespace yugen
 
      bool Profile::save_data(const json& data)
      {
-          const std::string path = data_dir() + PROFILE_FILE;
+          const std::string path = config_dir() + PROFILE_FILE;
 
           std::ofstream out(path);
 
@@ -1360,7 +1422,7 @@ namespace yugen
 
      json Profile::load_profile()
      {
-          const std::string path = data_dir() + PROFILE_FILE;
+          const std::string path = config_dir() + PROFILE_FILE;
           if(!fs::exists(path)) return json::object();
 
           std::ifstream f(path);
@@ -1536,18 +1598,30 @@ namespace yugen
      }
 
      /*
-      * The picture for one track, as a url, asked for by name.
+      * Everything last.fm holds on one track, handed over as the json text it
+      * answered with.
       *
       * get_similar hands back most of its suggestions with nothing to show -
       * the similar list carries the placeholder far more often than it carries
       * artwork - so this is the second look, and the ui spends it per card.
-      * What comes back is the album's cover rather than the track's, which is
-      * what last.fm keeps on a track page, and it is handed over as it arrived:
-      * the placeholder is filtered on the ui side, where a card that ends up
+      * What a track page keeps is the album's cover rather than the track's,
+      * and it is not picked out here: the reply is passed on whole and read on
+      * the ui side, where the placeholder is filtered and a card that ends up
       * with nothing is simply not shown.
+      *
+      * Answers are kept, so a shelf drawn a second time costs no requests. One
+      * that came back with nothing is kept as well - that is an answer too, and
+      * the point of holding it is not to ask again.
       */
-     std::string MusicManager::get_track_cover(const std::string& artist, const std::string& track_name)
+     std::string MusicManager::get_info(const std::string& artist, const std::string& track_name)
      {
+          const std::string cached_key = artist + " - " + track_name;
+          auto cached = yugen::cached_info(cached_key);
+          if(cached.has_value()) {
+               DBG("Fetched info for {} from cache", cached_key);
+               return cached.value();
+          }
+
           if(api_key().empty()) {
                std::println("[WARNING] NO LASTFM API KEY FOUND.");
                return "";
@@ -1579,25 +1653,20 @@ namespace yugen
           if(response.empty()) return "";
 
           const auto data = json::parse(response, nullptr, false);
-          if(data.is_discarded() || data.empty()) return {};
-
-          // a track last.fm knows by name but has no release for has no
-          // picture either: every step down to the image list has to be there
-          if(!data.contains("track") || !data["track"].contains("album") 
-          || !data["track"]["album"].contains("image")) return "";
-
-          const auto& images = data["track"]["album"]["image"];
-          if(images.empty()) return "";
-
-          // the same list of sizes as above, and the same reason for the largest
-
-          for(const auto& i : images) {
-               if(i.value("size", "") == "extralarge") {
-                    return i.value("#text", "");
-               }
+          if(data.is_discarded() || data.empty()) {
+               store_info(cached_key, "");
+               DBG("Failed to get data for {}, added to cache: {}", cached_key, cached_key);
+               return {};
           }
 
-          return "";
+          store_info(cached_key, data.dump());
+          DBG("Fetched and added to cache successfully: {}", cached_key);
+          if(data.contains("track") && data["track"].contains("wiki")) {
+               const std::string summary = data["track"]["wiki"].at("summary");
+               const std::string content = data["track"]["wiki"].at("content");
+               DBG("Wiki for {}: \nSummary: {} \nContent: {}", cached_key, summary, content);
+          }
+          return data.dump();
      }
 
      /*
@@ -1616,7 +1685,7 @@ namespace yugen
       */
      void MusicManager::init()
      {
-          const std::string path = data_dir() + API_KEY_FILE;
+          const std::string path = config_dir() + API_KEY_FILE;
           try {
                if(!fs::exists(path)) {
                     if(!API_KEY.empty()) {
@@ -1650,7 +1719,7 @@ namespace yugen
                const char* env = getenv("LASTFM_API_KEY");
                if(env && *env) return std::string(env);
 
-               std::ifstream f(data_dir() + API_KEY_FILE);
+               std::ifstream f(config_dir() + API_KEY_FILE);
                std::string k;
                if(f) f >> k;
                return k;

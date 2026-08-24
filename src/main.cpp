@@ -137,7 +137,7 @@ coco::stray start(saucer::application* app)
           std::println("[ERROR] Engine init failed: {}", static_cast<int>(res));
      }
 
-     fs::create_directories(yugen::data_dir());
+     fs::create_directories(yugen::config_dir());
      // after the directory, not before: init() writes the last.fm key into it
      // and an ofstream will not make the path itself
      mm::init();
@@ -441,7 +441,7 @@ coco::stray start(saucer::application* app)
           return sm::load_volume();
      });
 
-     webview->expose("get_file_path", [] -> std::string{
+     webview->expose("get_music_dir", [] -> std::string{
           passwd* p = getpwuid(getuid());
           if(p) {
                fs::create_directories(std::string(p->pw_dir) + "/Music" );
@@ -456,8 +456,8 @@ coco::stray start(saucer::application* app)
           return mm::get_similar(file_path, limit);
      });
 
-     expose_async(webview, "get_track_cover", [](std::string artist, std::string track_name){
-          return mm::get_track_cover(artist, track_name);
+     expose_async(webview, "get_info", [](std::string artist, std::string track_name){
+          return mm::get_info(artist, track_name);
      });
 
      expose_async(webview,"get_playlist_cover", [](std::string playlist_name){
