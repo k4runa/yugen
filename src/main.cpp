@@ -35,8 +35,10 @@ namespace fs = std::filesystem;
 
 using mm = yugen::MusicManager;
 using sm = yugen::SoundManager;
-using co = yugen::Core;
+using st = yugen::Settings;
 using pf = yugen::Profile;
+using co = yugen::Core;
+
 
 namespace
 {
@@ -466,6 +468,22 @@ coco::stray start(saucer::application* app)
 
      expose_async(webview,"set_playlist_cover", [](std::string playlist_name, std::string base64_pic){
           return mm::set_or_update_playlist_cover(playlist_name, base64_pic);
+     });
+
+     expose_async(webview,"set_keybind", [](std::string key, std::string value){
+          return st::set(key, value);
+     });
+
+     expose_async(webview,"remove_keybind", [](std::string key){
+          return st::remove(key);
+     });
+     
+     expose_async(webview, "get_keybind", [](std::string key){
+          return st::get(key);
+     });
+
+     expose_async(webview, "get_all_keybinds", []{
+          return st::get_all();
      });
 
 
