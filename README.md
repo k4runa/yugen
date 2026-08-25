@@ -1,5 +1,22 @@
 # yugen
 
+<p align="center">
+  <img src="screenshots/home.png" width="85%" alt="the home page, with liked albums and new arrivals" />
+</p>
+
+<p align="center">
+  <img src="screenshots/song-details.png" width="85%" alt="the track modal, open over the home page, with synced lyrics beside it" />
+  <br />
+  <em>the track modal, with lyrics scrolling along</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/suggested.png" width="49%" alt="suggested for you, with the up next queue above it" />
+  <img src="screenshots/liked-songs.png" width="49%" alt="liked songs, with more like this underneath" />
+  <br />
+  <em>what last.fm makes of the library, and of the songs you liked</em>
+</p>
+
 A desktop music player for Linux. Plays local mp3 files, searches and downloads
 tracks from YouTube and SoundCloud through `yt-dlp`, keeps playlists and liked
 songs, shows synced lyrics from [lrclib](https://lrclib.net), suggests what to
