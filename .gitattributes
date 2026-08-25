@@ -1,2 +1,6 @@
 include/miniaudio.h linguist-vendored
 _deps/** linguist-vendored
+*.cmake linguist-vendored
+CMakeLists.txt linguist-vendored
+**/CMakeLists.txt linguist-vendored
+cpm-package-lock.cmake linguist-vendored
