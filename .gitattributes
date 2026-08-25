@@ -1,1 +1,2 @@
 include/miniaudio.h linguist-vendored
+_deps/** linguist-vendored
