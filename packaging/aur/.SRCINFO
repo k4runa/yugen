@@ -2,7 +2,7 @@ pkgbase = yugen
 	pkgdesc = A desktop music player with YouTube/SoundCloud search, lyrics, and Discord Rich Presence
 	pkgver = 1.0.0
 	pkgrel = 1
-	url = https://github.com/k4runa/yugen
+	url = https://github.com/gal1ce/yugen
 	arch = x86_64
 	license = MIT
 	makedepends = cmake
@@ -17,7 +17,7 @@ pkgbase = yugen
 	depends = yt-dlp
 	depends = ffmpeg
 	depends = hicolor-icon-theme
-	source = yugen-1.0.0.tar.gz::https://github.com/k4runa/yugen/archive/refs/tags/v1.0.0.tar.gz
+	source = yugen-1.0.0.tar.gz::https://github.com/gal1ce/yugen/archive/refs/tags/v1.0.0.tar.gz
 	sha256sums = 4a4f16fb75ecf7915cb49a5b002b46a7fc0cfa5f7df9d764bfa8c420b090fabf
 
 pkgname = yugen

@@ -5,7 +5,7 @@ pkgver=1.0.0
 pkgrel=1
 pkgdesc="A desktop music player with YouTube/SoundCloud search, lyrics, and Discord Rich Presence"
 arch=('x86_64')
-url="https://github.com/k4runa/yugen"
+url="https://github.com/gal1ce/yugen"
 license=('MIT')
 # webkitgtk-6.0 and gtk4 are what the binary actually links against - the gtk3
 # webkit2gtk-4.1 is a different library and will not satisfy it. ffmpeg is not

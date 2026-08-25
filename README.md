@@ -35,7 +35,7 @@ executable, so the binary is all there is to run.
 ## Install
 
 ```sh
-curl -sL https://raw.githubusercontent.com/k4runa/yugen/master/install.sh | bash
+curl -sL https://raw.githubusercontent.com/gal1ce/yugen/master/install.sh | bash
 ```
 
 It offers two options. `--appimage` and `--source` skip the prompt.
@@ -64,7 +64,7 @@ nothing is asked:
 
 ```sh
 export LASTFM_API_KEY="your-key"
-curl -sL https://raw.githubusercontent.com/k4runa/yugen/master/install.sh | bash
+curl -sL https://raw.githubusercontent.com/gal1ce/yugen/master/install.sh | bash
 ```
 
 If you skipped it, or you built yugen yourself, there are two ways in. Write the

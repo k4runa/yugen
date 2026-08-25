@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-REPO="k4runa/yugen"
+REPO="gal1ce/yugen"
 VERSION="v1.1.1"
 APPIMAGE_URL="https://github.com/$REPO/releases/download/$VERSION/Yugen-x86_64.AppImage"
 
