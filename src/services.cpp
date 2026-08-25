@@ -1300,7 +1300,7 @@ namespace yugen
              .setDetails(track.title)
              .setState(track.artist)
              .setLargeImageKey(image)
-             .setLargeImageText(track.album.empty() ? "yugen" : track.album)
+             .setLargeImageText(track.album.empty() ? "Yugen" : track.album)
              .setStartTimestamp(started)
              .setEndTimestamp(ends);
 
@@ -1356,9 +1356,9 @@ namespace yugen
           json data = load_profile();
           auto& arr = data["favorite_songs"];
           bool found = false;
-          for(auto it = arr.begin(); it != arr.end(); ++it)
+          for(const auto& item : arr)
           {
-               if((*it).value("file_path","") == track.file_path) {
+               if(item.value("file_path", "") == track.file_path) {
                     found = true;
                     break;
                }
