@@ -22,3 +22,6 @@ packaging/aur/*.tar.gz
 AppDir/
 build-appimage/
 *.AppImage
+_deps/
+CMakeFiles/
+build/
