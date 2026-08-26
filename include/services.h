@@ -157,15 +157,16 @@ namespace yugen
                // puts the last.fm key on disk if this run is the one that has it
                static void init();
                // playlists
+               static bool set_or_update_playlist_cover(const std::string& playlist_name, const std::string& base64_pic);
                static bool rename_playlist(const std::string& playlist_name, const std::string& new_playlist_name);
                static bool remove_from_playlist(const std::string& playlist_name, const std::string& file_path);
                static bool add_to_playlist(const std::string& playlist_name, const std::string& file_path);
-               static std::vector<std::string> get_playlist(const std::string& playlist_name);
+
                static bool create_playlist(const std::string& playlist_name);
                static bool delete_playlist(const std::string& playlist_name);
-               static bool set_or_update_playlist_cover(const std::string& playlist_name, const std::string& base64_pic);
-               static std::string get_playlist_cover(const std::string& playlist_name);
 
+               static std::vector<std::string> get_playlist(const std::string& playlist_name);
+               static std::string get_playlist_cover(const std::string& playlist_name);
                static std::vector<std::string> get_playlists();
 
                // liked songs

@@ -1344,7 +1344,6 @@ namespace yugen
                t.artist = s.value("artist", "");
                t.album = s.value("album","");
                t.file_path = s.value("file_path","");
-
                songs.push_back(t);
           }
 
@@ -1662,11 +1661,13 @@ namespace yugen
 
           store_info(cached_key, data.dump());
           DBG("Fetched and added to cache successfully: {}", cached_key);
+          
           if(data.contains("track") && data["track"].contains("wiki")) {
                const std::string summary = data["track"]["wiki"].at("summary");
                const std::string content = data["track"]["wiki"].at("content");
                DBG("Wiki for {}: \nSummary: {} \nContent: {}", cached_key, summary, content);
           }
+          
           return data.dump();
      }
 
