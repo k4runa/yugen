@@ -1497,12 +1497,15 @@ type Bind =
     | 'prev_track'
     | 'volume_up'
     | 'volume_down'
+    | 'toggle_mute'
     | 'toggle_like'
     | 'toggle_shuffle'
     | 'toggle_loop'
+    | 'focus_search'
 
 // needs_track: what has nothing to act on until something is cued. volume,
-// shuffle and loop are settings and stand on their own
+// mute, shuffle, loop and the search are settings, or a way in, and stand on
+// their own
 const KEYBINDS: { id: Bind; label: string; fallback: string; needs_track: boolean }[] = [
     { id: 'play_pause', label: 'Play / pause', fallback: 'Space', needs_track: true },
     { id: 'seek_forward', label: 'Forward 10 seconds', fallback: 'ArrowRight', needs_track: true },
@@ -1511,9 +1514,11 @@ const KEYBINDS: { id: Bind; label: string; fallback: string; needs_track: boolea
     { id: 'prev_track', label: 'Previous track', fallback: 'Ctrl+ArrowLeft', needs_track: true },
     { id: 'volume_up', label: 'Volume up', fallback: 'ArrowUp', needs_track: false },
     { id: 'volume_down', label: 'Volume down', fallback: 'ArrowDown', needs_track: false },
+    { id: 'toggle_mute', label: 'Mute / unmute', fallback: 'KeyM', needs_track: false },
     { id: 'toggle_like', label: 'Like the playing track', fallback: 'KeyL', needs_track: true },
     { id: 'toggle_shuffle', label: 'Cycle shuffle', fallback: 'KeyS', needs_track: false },
     { id: 'toggle_loop', label: 'Toggle repeat', fallback: 'KeyR', needs_track: false },
+    { id: 'focus_search', label: 'Search', fallback: 'Shift+KeyK', needs_track: false },
 ]
 
 const VOLUME_STEP = 0.05
@@ -2083,6 +2088,8 @@ export default function App() {
     const [downloading, set_downloading] = useState<string[]>([])
     const [source, set_source] = useState<Source>('yt')
     const [search_open, set_search_open] = useState(false)
+    // the shortcut opens the box and then has to put the caret in it
+    const search_input = useRef<HTMLInputElement>(null)
 
     // a pass costs one request per seed, so what it turned up is kept until the
     // refresh button asks for another one
@@ -3746,6 +3753,9 @@ export default function App() {
                 case 'volume_down':
                     change_volume(Math.max(volume - VOLUME_STEP, 0))
                     break
+                case 'toggle_mute':
+                    toggle_mute()
+                    break
                 case 'toggle_like':
                     // needs_track already covered this, but only the check
                     // written out here narrows it away for the compiler
@@ -3757,6 +3767,18 @@ export default function App() {
                 case 'toggle_loop':
                     void toggle_loop()
                     break
+                case 'focus_search':
+                    // the box is its own overlay on a topbar every page keeps,
+                    // so there is no page to leave first
+                    set_search_open(true)
+                    // the input is only mounted once the label is on screen,
+                    // which it always is, but focus after paint either way so
+                    // an opening box does not lose the caret
+                    requestAnimationFrame(() => {
+                        search_input.current?.focus()
+                        search_input.current?.select()
+                    })
+                    break
             }
         }
 
@@ -3764,7 +3786,23 @@ export default function App() {
 
         return () => window.removeEventListener('keydown', on_key)
         // eslint-disable-next-line react-hooks/exhaustive-deps -- the handlers read these directly
-    }, [current, paused, position, length, volume, keybinds, shuffle_mode, looped])
+    }, [
+        current,
+        paused,
+        position,
+        length,
+        volume,
+        prev_volume,
+        // liked and queue are read through toggle_like and skip. without them
+        // the handler holds whichever set and order it was built with, and the
+        // like key pressed twice in a row likes the same track twice rather
+        // than putting it back
+        liked,
+        queue,
+        keybinds,
+        shuffle_mode,
+        looped,
+    ])
 
     // miniaudio parks the cursor at the end of a track, so is_finished drives the queue
     useEffect(() => {
@@ -3964,6 +4002,19 @@ export default function App() {
         const clamped = Math.max(0, Math.min(1, v))
         set_volume_state(clamped)
         bridge().set_volume(clamped)
+    }
+
+    // silence is not a level to go back to, so muting parks where the slider was
+    // and unmuting puts it back there. a mute with nothing remembered - the
+    // volume was already at zero when yugen opened - comes back at half.
+    const toggle_mute = () => {
+        if (volume === 0) {
+            change_volume(prev_volume > 0 ? prev_volume : 0.5)
+            return
+        }
+
+        set_prev_volume(volume)
+        change_volume(0)
     }
 
     function end_resize(e: React.PointerEvent<HTMLDivElement>) {
@@ -5615,6 +5666,7 @@ export default function App() {
                                         <Icon d={ICONS.search} size={15} />
                                     )}
                                     <input
+                                        ref={search_input}
                                         placeholder='Search a song ♪(´▽｀)'
                                         value={query}
                                         onChange={(e) => set_query(e.currentTarget.value)}
@@ -6743,12 +6795,7 @@ export default function App() {
                             e.preventDefault()
                             e.stopPropagation()
 
-                            if (volume === 0) {
-                                change_volume(prev_volume > 0 ? prev_volume : 0.5)
-                            } else {
-                                set_prev_volume(volume)
-                                change_volume(0)
-                            }
+                            toggle_mute()
                         }}
                     >
                         <Icon

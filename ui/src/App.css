@@ -51,7 +51,7 @@
     --art-max: 0.56;
 
     --gutter: 0.5rem;
-    --search-h: 2.75rem;
+    --search-h: 3.125rem;
     /* the two round buttons of the top row, held to one size by one value */
     --top-btn: 2.5rem;
     --radius: 1.375rem;
@@ -664,7 +664,10 @@ button {
     right: 0;
     display: flex;
     flex-direction: column;
-    border-radius: 1.375rem;
+    /* closed, the box is exactly one search row tall, so half its height is
+       what makes it a pill - the corner has to follow the height rather than
+       sit on a number that only happened to match it */
+    border-radius: calc(var(--search-h) / 2);
     overflow: hidden;
     cursor: text;
     transition:
@@ -678,7 +681,7 @@ button {
 }
 
 .search.open {
-    border-radius: 1.375rem;
+    border-radius: calc(var(--search-h) / 2);
     box-shadow:
         inset 0 1px 0 var(--specular),
         var(--shadow-lift),
