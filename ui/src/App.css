@@ -801,6 +801,46 @@ button {
     }
 }
 
+/* the cover is a button now, but only the picture inside it should look like
+   anything: the frame is stripped and the shadow stays on the image. it sits
+   at the top of its column rather than stretching, so the veil never reaches
+   past the artwork when the body beside it runs long */
+.hero-cover-btn {
+    position: relative;
+    align-self: start;
+    padding: 0;
+    border: none;
+    border-radius: 1.125rem;
+    background: none;
+    line-height: 0;
+    cursor: pointer;
+    transition: transform var(--fast) var(--spring);
+}
+
+.hero-cover-btn:active {
+    transform: scale(0.985);
+}
+
+/* nothing about a cover says it can be clicked, so hovering has to say it */
+.hero-cover-veil {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 1.125rem;
+    background: hsl(0 0% 4% / 0.5);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+    color: #fff;
+    opacity: 0;
+    transition: opacity var(--fast) ease;
+}
+
+.hero-cover-btn:hover .hero-cover-veil,
+.hero-cover-btn:focus-visible .hero-cover-veil {
+    opacity: 1;
+}
+
 .hero-cover {
     width: 12.5rem;
     height: 12.5rem;

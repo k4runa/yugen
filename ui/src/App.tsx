@@ -1452,6 +1452,8 @@ const ICONS = {
     plus: 'M12 5v14M5 12h14',
     minus: 'M5 12h14',
     rename: 'M4 20h16M5 15.5 15.5 5a2.1 2.1 0 0 1 3 3L8 18.5l-4 1z',
+    // solid only: three r=1 dots stroked at this weight read as blobs
+    more: 'M5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2M19 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2',
     chevron: 'M9 5l7 7-7 7',
     check: 'M4.5 12.5 9 17l10.5-10.5',
     filter: 'M4 6h16M7 12h10M10 18h4',
@@ -5924,7 +5926,26 @@ export default function App() {
                         is still on the bar below and in the rail beside it. */}
                     {current && !(view === 'playlist' && selection) && (
                         <section className='now-section'>
-                            {cover(current, 'hero-cover')}
+                            {/* what is playing is a track like any other, and
+                                the only one with no row to right-click. so the
+                                menu hangs off its cover instead - by either
+                                button, since there is nothing else a click on
+                                it could have meant */}
+                            <button
+                                className='hero-cover-btn'
+                                {...tip('Track options')}
+                                onClick={song_context(current)}
+                                onContextMenu={song_context(current)}
+                            >
+                                <Cover
+                                    data={cover_of(current)}
+                                    alt={title_of(current)}
+                                    className='hero-cover'
+                                />
+                                <span className='hero-cover-veil'>
+                                    <Icon d={ICONS.more} size={22} fill />
+                                </span>
+                            </button>
 
                             <div className='now-body'>
                                 <div className='label'>Now playing</div>
