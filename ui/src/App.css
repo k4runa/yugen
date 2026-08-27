@@ -3075,6 +3075,19 @@ button.badge:disabled {
 /* transparent and on top, so the click that opens the native file dialog
    lands on the input itself rather than being proxied through a button -
    some webviews refuse to honour a programmatic .click() on a hidden one */
+/* a picker with no face of its own: it is never clicked directly, only opened
+   from somewhere else, so it is kept out of the way rather than hidden with
+   display:none - which not every engine will open programmatically */
+.offscreen-input {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
 .avatar-upload-input {
     position: absolute;
     inset: 0;

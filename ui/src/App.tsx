@@ -652,6 +652,11 @@ type Bridge = {
     fetch_songs(path: string): Promise<string[]>
     get_metadata(path: string): Promise<string[]>
     get_cover(path: string): Promise<string>
+    // a cover the user picked in place of the one in the file's tags. it is kept
+    // beside the library rather than written into the file, and get_cover answers
+    // with it once it is set - so nothing that draws a cover has to know which
+    // of the two it is looking at
+    update_track_cover(path: string, base64_img: string): Promise<boolean>
     get_lyrics(title: string, artist: string): Promise<string>
     set_activity(state: boolean): Promise<void>
     get_activity(): Promise<boolean>
@@ -1959,11 +1964,12 @@ export default function App() {
     const [bio_draft, set_bio_draft] = useState('')
     const [crop_busy, set_crop_busy] = useState(false)
     // the photo waiting to be cropped, held as a data url while the window is
-    // up, and what it is being cropped for: the profile, or a playlist by name
+    // up, and what it is being cropped for: the profile, a playlist by name, or
+    // a track by file name
     const [crop_src, set_crop_src] = useState('')
-    const [crop_for, set_crop_for] = useState<{ kind: 'avatar' } | { kind: 'playlist'; name: string }>(
-        { kind: 'avatar' },
-    )
+    const [crop_for, set_crop_for] = useState<
+        { kind: 'avatar' } | { kind: 'playlist'; name: string } | { kind: 'track'; name: string }
+    >({ kind: 'avatar' })
 
     const [volume, set_volume_state] = useState(1)
     // what unmuting goes back to, so the level survives a trip through zero
@@ -2090,6 +2096,13 @@ export default function App() {
     const [search_open, set_search_open] = useState(false)
     // the shortcut opens the box and then has to put the caret in it
     const search_input = useRef<HTMLInputElement>(null)
+
+    // the right-click menu closes on the very click that would open a picker
+    // inside it, and an unmounted input never reports what was chosen. so the
+    // one for track covers lives outside the menu and is opened through this,
+    // with the track it was opened for parked alongside it
+    const cover_input = useRef<HTMLInputElement>(null)
+    const cover_target = useRef('')
 
     // a pass costs one request per seed, so what it turned up is kept until the
     // refresh button asks for another one
@@ -4042,7 +4055,7 @@ export default function App() {
 
         const height =
             target.kind === 'song'
-                ? 230
+                ? 275
                 : target.kind === 'playlist'
                   ? 150
                   : target.kind === 'suggestion'
@@ -4155,6 +4168,18 @@ export default function App() {
             if (crop_for.kind === 'avatar') {
                 const ok = await bridge().set_profile_picture(data_url)
                 if (ok) set_profile_pic(await bridge().get_profile_picture())
+            } else if (crop_for.kind === 'track') {
+                const name = crop_for.name
+                const path = (await music_dir()) + name
+                const ok = await bridge().update_track_cover(path, raw_base64(data_url))
+
+                if (ok) {
+                    // read back the same way the scan does, so the picture in
+                    // hand is the one every listing would fetch. it is also what
+                    // --art-h/--art-s are mixed from, and those follow the map
+                    const saved = await bridge().get_cover(path)
+                    set_covers_map((prev) => ({ ...prev, [name]: saved }))
+                }
             } else {
                 const name = crop_for.name
                 const ok = await bridge().set_playlist_cover(name, raw_base64(data_url))
@@ -6275,6 +6300,17 @@ export default function App() {
                             </div>
 
                             <div className='context-sep' />
+                            <button
+                                onClick={() => {
+                                    cover_target.current = open_menu.song
+                                    cover_input.current?.click()
+                                }}
+                            >
+                                <Icon d={ICONS.upload} size={15} />
+                                Change cover
+                            </button>
+
+                            <div className='context-sep' />
                             <button className='danger' onClick={() => remove_song(open_menu.song)}>
                                 <Icon d={ICONS.trash} size={15} />
                                 Delete from disk
@@ -6533,6 +6569,18 @@ export default function App() {
                     </div>
                 </div>
             )}
+
+            {/* opened from the track menu, and deliberately not inside it -
+                see cover_input */}
+            <input
+                ref={cover_input}
+                className='offscreen-input'
+                type='file'
+                accept='image/png,image/jpeg'
+                aria-hidden
+                tabIndex={-1}
+                onChange={(e) => pick_image(e, { kind: 'track', name: cover_target.current })}
+            />
 
             {crop_src && (
                 <CropDialog
