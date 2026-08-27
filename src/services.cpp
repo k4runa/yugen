@@ -87,6 +87,7 @@ namespace yugen
           constexpr const char* PROFILE_FILE     = "/profile.json";
           constexpr const char* LIKED_SONGS_FILE = "/liked_songs.json";
           constexpr const char* COVERS_FILE      = "/covers.json";
+          constexpr const char* CUSTOM_COVERS    = "/custom_covers.json";
 
           constexpr const int MIN_COUNT = 50;
 
@@ -551,6 +552,21 @@ namespace yugen
 
      std::string Core::get_cover(const std::string& file_path)
      {
+          const std::string covers_path = config_dir() + CUSTOM_COVERS;
+          json covers = json::object();
+          if(fs::exists(covers_path)) {
+               std::ifstream f(covers_path);
+               if(f.is_open()) {
+                    covers = json::parse(f, nullptr, false);
+               }
+          }
+
+          if(!covers.is_discarded() && covers.is_object() && covers.contains(file_path)) 
+          {
+               const auto& hit = covers.at(file_path);
+               if(hit.is_string() && !hit.empty()) return hit.get<std::string>();
+          }
+
           TagLib::MPEG::File f(file_path.c_str());
 
           auto* tag = f.ID3v2Tag();
@@ -1830,5 +1846,43 @@ namespace yugen
           if(data.empty()) return "";
 
           return data.dump();
+     }
+
+     bool MusicManager::update_track_cover(const std::string& file_path, const std::string& base64_img)
+     {
+          //First of all, check if the params are valid
+          if(file_path.empty() || base64_img.empty()) return false;
+
+          // Then load ~/.config/yugen/covers.json because it is where were store the
+          const std::string covers_path = config_dir() + CUSTOM_COVERS;
+          json data = json::object();
+          std::ifstream f(covers_path);
+          if(f.is_open()) {
+               data = json::parse(f, nullptr, false); // We're not allowing exception otherwise app would crash.
+               if(data.is_discarded() || !data.is_object()) {
+                    DBG("Something went wrong while trying to parse the file: {}", covers_path);
+                    return false;
+               }
+               // Data loaded successfully, so we can close the file.
+               f.close();
+          }
+
+          // Now try to write to file.
+          std::ofstream out(covers_path);
+          if(out.is_open()) {
+               data[file_path] = base64_img;
+               out << data.dump(4);
+
+               out.close();
+               if(out.fail()) {
+                    DBG("Something went wrong while trying to edit the file: {}", covers_path);
+                    return false;
+               }
+
+               return true;
+          }
+
+          // Something went wrong again..
+          return false;
      }
 }

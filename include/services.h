@@ -188,6 +188,7 @@ namespace yugen
                // picture for - which is most of them. last.fm's whole reply as
                // json text, read on the ui side; answers are kept in info.json
                static std::string get_info(const std::string& artist, const std::string& track_name);
+               static bool update_track_cover(const std::string& file_path, const std::string& base64_img);
           private:
                static bool save_playlists(const json& data);
                static json load_playlists();

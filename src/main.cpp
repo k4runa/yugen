@@ -486,6 +486,9 @@ coco::stray start(saucer::application* app)
           return st::get_all();
      });
 
+     expose_async(webview, "update_track_cover", [](std::string file_path, std::string base64_img){
+          return mm::update_track_cover(file_path, base64_img);
+     });
 
      /*
       * The window is set up last, once every binding exists, so the page cannot
