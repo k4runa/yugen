@@ -428,11 +428,14 @@ namespace yugen::mpris
           /*
            * The cover. mpris hands out a url and the artwork lives inside the
            * file's own id3 tags, so it has to be written out somewhere a client
-           * can open it. The name is the digest of the track path, so a track
-           * that comes round again reuses the file it wrote last time instead of
-           * growing the directory.
+           * can open it. The name is the digest of the picture rather than of
+           * the track path: a client caches what it fetched by url, so a cover
+           * that is changed has to arrive at a new one or every panel goes on
+           * showing the old artwork. The same picture still lands on the same
+           * file, so a track that comes round again writes nothing - and two
+           * tracks that carry the same cover now share the one file.
            */
-          std::string cache_cover(const std::string& file_path, const std::string& base64)
+          std::string cache_cover(const std::string& base64)
           {
                if(base64.empty()) return "";
 
@@ -442,7 +445,14 @@ namespace yugen::mpris
                fs::create_directories(dir, ec);
                if(ec) return "";
 
-               const fs::path out = dir / std::format("{:016x}.jpg", std::hash<std::string>{}(file_path));
+               // id3 carries png as often as jpeg, and a client that goes by the
+               // extension will not open one that is named wrong - so the name
+               // says what the bytes are. base64 keeps the leading bytes in its
+               // leading characters, which is enough to tell the two apart
+               // without decoding anything
+               const char* ext = base64.starts_with("iVBORw0KGgo") ? "png" : "jpg";
+
+               const fs::path out = dir / std::format("{:016x}.{}", std::hash<std::string>{}(base64), ext);
 
                if(!fs::exists(out))
                {
@@ -517,7 +527,7 @@ namespace yugen::mpris
      {
           // decoding and writing the cover touches the disk, so it happens before
           // the lock rather than under it
-          const std::string art = file_path.empty() ? std::string{} : cache_cover(file_path, cover_base64);
+          const std::string art = file_path.empty() ? std::string{} : cache_cover(cover_base64);
 
           {
                std::lock_guard lock{mtx};
@@ -526,9 +536,11 @@ namespace yugen::mpris
                // which a library rescan does without a note of the music having
                // changed. bumping the id then would tell every client the track
                // restarted - so the same track over again is not an event
-               if(state.has_track == !file_path.empty() && state.file_path == file_path
-                    && state.title == title && state.artist == artist && state.album == album
-                    && state.art_url == art)
+               const bool same_track = state.has_track == !file_path.empty()
+                    && state.file_path == file_path;
+
+               if(same_track && state.title == title && state.artist == artist
+                    && state.album == album && state.art_url == art)
                {
                     return;
                }
@@ -540,12 +552,19 @@ namespace yugen::mpris
                state.art_url = art;
                state.file_path = file_path;
 
-               // a fresh id for a track that really is new, so a client holding
-               // one for SetPosition can tell that the music moved on under it
-               state.track_id = std::format("/app/yugen/track/{}", ++state.serial);
+               // only what is playing moving on is worth a new id and a rewound
+               // position. giving a track a cover rewrites this same metadata
+               // while it plays, and a client reading that as a restart would
+               // throw its progress bar back to zero mid-song
+               if(!same_track)
+               {
+                    // a fresh id for a track that really is new, so a client
+                    // holding one for SetPosition can tell the music moved on
+                    state.track_id = std::format("/app/yugen/track/{}", ++state.serial);
 
-               state.position = 0.0;
-               state.stamp = g_get_monotonic_time();
+                    state.position = 0.0;
+                    state.stamp = g_get_monotonic_time();
+               }
 
                if(!state.has_track)
                {
