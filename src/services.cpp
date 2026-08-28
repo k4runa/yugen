@@ -164,6 +164,11 @@ namespace yugen
           json info_cache;
           bool info_cache_loaded = false;
 
+          std::mutex u_cover_mtx;
+          json u_cover_cache;
+          bool u_cover_cache_loaded = false;
+
+
           // lookups already in flight, so two publishes of the same track do not
           // both go out to the network
           std::set<std::string> cover_inflight;
@@ -550,8 +555,66 @@ namespace yugen
           return artwork;
      }
 
+     static void load_u_cover_cache() 
+     {
+          if(u_cover_cache_loaded) return;
+
+          u_cover_cache_loaded = true;
+          u_cover_cache = json::object();
+
+          const std::string path = config_dir() + CUSTOM_COVERS;
+
+          if(!fs::exists(path)) return;
+
+          std::ifstream f(path);
+          if(!f.is_open()) return;
+
+          const auto data = json::parse(f, nullptr, false);
+          if(!data.is_discarded() && data.is_object()) u_cover_cache = data;
+     }
+
+     static std::optional<std::string> cached_u_cover(const std::string& key) 
+     {
+          std::lock_guard<std::mutex> lk(u_cover_mtx);
+
+          load_u_cover_cache();
+
+          if(!u_cover_cache.contains(key)) return std::nullopt;
+
+          const auto& hit = u_cover_cache.at(key);
+
+          if(hit.is_string() && !hit.empty()) {
+               return hit.get<std::string>();
+          }
+
+          return std::nullopt;
+     }
+
+     static void store_u_cover(const std::string& key, const std::string& base64_img)
+     {
+          std::lock_guard<std::mutex> lk(u_cover_mtx);
+
+          load_u_cover_cache();
+
+          u_cover_cache[key] = base64_img;
+
+          std::ofstream out(config_dir() + CUSTOM_COVERS);
+          if(out.is_open()) {
+               out << u_cover_cache.dump(4);
+          }
+     }
+ 
      std::string Core::get_cover(const std::string& file_path)
      {
+          // file_path is a key also, so we can use it.
+          // check if key exists in cache, if so return it.
+          const auto cached = cached_u_cover(file_path);
+
+          if(cached.has_value()) {
+               DBG("Loaded custom cover from cache, key: {}", file_path);
+               return cached.value();
+          }
+
           const std::string covers_path = config_dir() + CUSTOM_COVERS;
           json covers = json::object();
           if(fs::exists(covers_path)) {
@@ -564,7 +627,14 @@ namespace yugen
           if(!covers.is_discarded() && covers.is_object() && covers.contains(file_path)) 
           {
                const auto& hit = covers.at(file_path);
-               if(hit.is_string() && !hit.empty()) return hit.get<std::string>();
+               if(hit.is_string() && !hit.empty()) {
+                    //A new custom cover??? add it to cache.
+                    DBG("Added new custom cover to cache: {}", file_path);
+                    const std::string val = hit.get<std::string>();
+                    store_u_cover(file_path, val);
+
+                    return val;
+               }
           }
 
           TagLib::MPEG::File f(file_path.c_str());
@@ -1850,39 +1920,13 @@ namespace yugen
 
      bool MusicManager::update_track_cover(const std::string& file_path, const std::string& base64_img)
      {
-          //First of all, check if the params are valid
-          if(file_path.empty() || base64_img.empty()) return false;
-
-          // Then load ~/.config/yugen/covers.json because it is where were store the
-          const std::string covers_path = config_dir() + CUSTOM_COVERS;
-          json data = json::object();
-          std::ifstream f(covers_path);
-          if(f.is_open()) {
-               data = json::parse(f, nullptr, false); // We're not allowing exception otherwise app would crash.
-               if(data.is_discarded() || !data.is_object()) {
-                    DBG("Something went wrong while trying to parse the file: {}", covers_path);
-                    return false;
-               }
-               // Data loaded successfully, so we can close the file.
-               f.close();
-          }
-
-          // Now try to write to file.
-          std::ofstream out(covers_path);
-          if(out.is_open()) {
-               data[file_path] = base64_img;
-               out << data.dump(4);
-
-               out.close();
-               if(out.fail()) {
-                    DBG("Something went wrong while trying to edit the file: {}", covers_path);
-                    return false;
-               }
-
+          DBG("Running function: update_track_cover(custom) --- file path: {}", file_path);
+          if(!file_path.empty() && !base64_img.empty())
+          {
+               store_u_cover(file_path, base64_img);
                return true;
           }
 
-          // Something went wrong again..
           return false;
      }
 }
