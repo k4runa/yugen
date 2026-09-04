@@ -1364,8 +1364,6 @@ namespace yugen
           // the cover, if one is known by now; the logo stands in until then and
           // whenever the track turns out to have no artwork anywhere
           const std::string key = fs::path(track.file_path).filename().string();
-          const auto cached = cached_u_cover(key);
-
           std::string image = youtube_cover(key);
 
           if(image.empty())
