@@ -13,7 +13,7 @@
 set -euo pipefail
 
 REPO="gal1ce/yugen"
-VERSION="v1.1.2"
+VERSION="v1.1.3"
 APPIMAGE_URL="https://github.com/$REPO/releases/download/$VERSION/Yugen-x86_64.AppImage"
 
 # The bundle links against the glibc of whatever machine built it, and glibc is
