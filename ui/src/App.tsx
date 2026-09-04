@@ -245,7 +245,9 @@ function asked(title: string, artist: string) {
 
 // right-click targets: a track, a playlist in the sidebar, or the sidebar itself
 type MenuTarget =
-    | { kind: 'song'; song: string }
+    // `within` is the run of tracks the row was drawn from, when that is a
+    // section of its own rather than the listing on screen - see play_from
+    | { kind: 'song'; song: string; within?: string[] }
     | { kind: 'playlist'; playlist: string }
     | { kind: 'sidebar' }
     // a track that is not here yet: the menu is where it is fetched from
@@ -646,6 +648,12 @@ async function in_lanes<T, R>(items: T[], lanes: number, work: (item: T) => Prom
 
     return done
 }
+
+// two runs of tracks that hold the same names in the same order. the sections
+// are rebuilt on every render, so identity says nothing about whether the one
+// being played from has actually changed
+const same_run = (a: string[] | null, b: string[] | null) =>
+    a === b || (!!a && !!b && a.length === b.length && a.every((name, i) => name === b[i]))
 
 // the functions main.cpp exposes through saucer
 type Bridge = {
@@ -1996,6 +2004,11 @@ export default function App() {
     // the order itself, kept apart from the mode: it is dealt once, by a click,
     // and then it is the queue until something asks for another one
     const [shuffled, set_shuffled] = useState<string[] | null>(null)
+    // the section a track was started from, when that is not the listing on
+    // screen: the favourites page and the shelves on the library front are runs
+    // of their own, and next/prev should stay inside the one that was opened
+    // rather than falling back to whatever the view happens to be showing
+    const [scope, set_scope] = useState<string[] | null>(null)
     const [shuffle_menu, set_shuffle_menu] = useState<{ x: number; y: number } | null>(null)
 
     // the sheet for one track: whatever lrclib returned for it, '' included. it
@@ -2889,8 +2902,32 @@ export default function App() {
         // status and this side has already read them into metadata_map
         const meta = metadata_map[name] ?? []
         await bridge().play_music((await music_dir()) + name, meta[0] || name, meta[1] || "", meta[2] || "")
+
+        // the far side builds a new sound per track and the new one never
+        // loops, whatever the last one was doing - so the flag is put back on
+        // here rather than left to a button nobody is going to press again
+        loops.current = false
+        await sync_loop(looped)
+
         set_current(name)
         set_paused(false)
+    }
+
+    // playing out of a section pins it: the bar, Up next and the shuffle all
+    // walk these tracks until something is started from a listing again, which
+    // passes null and hands the queue back to whatever is on screen
+    async function play_from(name: string, tracks: string[] | null) {
+        const moved = !same_run(scope, tracks)
+
+        set_scope(tracks)
+
+        // the running order was dealt over the pool this is leaving, so a
+        // shuffle already going gets a fresh one over the section being entered
+        if (moved && shuffle_mode === 'listing') {
+            set_shuffled(await bridge().shuffle(tracks ?? listed))
+        }
+
+        await play_music(name)
     }
 
     function seek_target(e: React.PointerEvent<HTMLDivElement>) {
@@ -2946,9 +2983,38 @@ export default function App() {
         set_paused(!paused)
     }
 
+    /*
+     * Repeat. toggle_loop() on the far side ignores what it is passed and flips
+     * the flag on the sound that is loaded, and every play() loads a new sound
+     * with the flag clear - so this side keeps its own copy of what the backend
+     * is holding and only calls across when the two have come apart. Without
+     * that the flag is lost on every track change while the button still reads
+     * as on, and the track simply stops at the end.
+     */
+    const loops = useRef(false)
+
+    async function sync_loop(want: boolean) {
+        if (loops.current === want) return
+
+        loops.current = want
+        await bridge().toggle_loop(want)
+    }
+
     async function toggle_loop() {
-        await bridge().toggle_loop(!looped)
-        set_looped(!looped)
+        const want = !looped
+
+        set_looped(want)
+        await sync_loop(want)
+    }
+
+    // the sound is parked at its end and stopped, so getting it round again is
+    // a seek and a start. this is the net under the flag above: with the flag
+    // on the track never reports finished and none of this runs.
+    async function replay() {
+        await bridge().seek(0)
+        await bridge().resume()
+
+        set_position(0)
     }
 
     function skip(offset: number) {
@@ -3126,6 +3192,13 @@ export default function App() {
     const artists = useMemo(() => group_by(artist_of), [songs, metadata_map])
 
     const liked_songs = songs.filter((name) => liked.has(name))
+
+    // a favourite whose file has left the folder cannot be played, so it is on
+    // neither the shelf, the profile page, nor the run those two play from
+    const favorite_songs = useMemo(
+        () => favorites.map((track) => track.file_path).filter((name) => songs.includes(name)),
+        [favorites, songs],
+    )
     const groups = view === 'albums' ? albums : view === 'artists' ? artists : null
 
     // the library page is what has been marked, what has just arrived, and what
@@ -3657,7 +3730,7 @@ export default function App() {
     const has_arrivals = overview && arrivals.length >= 4
     const has_more = overview && songs.length > 0
 
-    const queue = shuffle_mode !== 'off' && shuffled?.length ? shuffled : listed
+    const queue = shuffle_mode !== 'off' && shuffled?.length ? shuffled : (scope ?? listed)
 
     /*
      * The order is dealt on the click and not a moment after. It used to be an
@@ -3674,7 +3747,7 @@ export default function App() {
         }
 
         // the backend owns the shuffling
-        const pool = mode === 'all' ? songs : listed
+        const pool = mode === 'all' ? songs : (scope ?? listed)
         set_shuffled(await bridge().shuffle(pool))
     }
 
@@ -3686,6 +3759,9 @@ export default function App() {
      */
     async function play_listing() {
         if (!listed.length) return
+
+        // whatever was pinned, this is a page being played from its top
+        set_scope(null)
 
         if (shuffle_mode === 'listing') {
             const order = await bridge().shuffle(listed)
@@ -3822,7 +3898,13 @@ export default function App() {
     // miniaudio parks the cursor at the end of a track, so is_finished drives the queue
     useEffect(() => {
         advance.current = () => {
-            if (!current || paused || looped) return
+            if (!current || paused) return
+
+            if (looped) {
+                void replay()
+                return
+            }
+
             skip(1)
         }
     })
@@ -4072,7 +4154,8 @@ export default function App() {
         })
     }
 
-    const song_context = (name: string) => context({ kind: 'song', song: name })
+    const song_context = (name: string, within?: string[]) =>
+        context({ kind: 'song', song: name, within })
 
     // it opens on what the track is rather than on where the last one was left:
     // the sheet is one button away, and this is a different song
@@ -4288,7 +4371,7 @@ export default function App() {
     }
 
     // the cover wall: what the library opens as, and what 'grid' picks elsewhere
-    function track_cards(names: string[]) {
+    function track_cards(names: string[], within?: string[]) {
         return (
             <section className='card-row'>
                 {names.map((name, i) => (
@@ -4296,8 +4379,8 @@ export default function App() {
                         key={name}
                         className='album'
                         style={{ '--i': i } as React.CSSProperties}
-                        onClick={() => play_music(name)}
-                        onContextMenu={song_context(name)}
+                        onClick={() => play_from(name, within ?? null)}
+                        onContextMenu={song_context(name, within)}
                     >
                         {cover(name, 'album-cover')}
                         {heart(name)}
@@ -4309,15 +4392,15 @@ export default function App() {
         )
     }
 
-    function track_rows(names: string[]) {
+    function track_rows(names: string[], within?: string[]) {
         return (
             <div className='track-rows'>
                 {names.map((name, i) => (
                     <div
                         key={name}
                         className='track'
-                        onClick={() => play_music(name)}
-                        onContextMenu={song_context(name)}
+                        onClick={() => play_from(name, within ?? null)}
+                        onContextMenu={song_context(name, within)}
                     >
                         {current === name ? (
                             // the bars stand for a track that is running, so a
@@ -4342,7 +4425,7 @@ export default function App() {
     }
 
     // the roomier playlist layout: cover, title/artist, album, added, length
-    function track_list(names: string[]) {
+    function track_list(names: string[], within?: string[]) {
         return (
             <div className='track-list'>
                 {names.map((name, i) => (
@@ -4352,8 +4435,8 @@ export default function App() {
                         // the same index the card grid deals itself out on, so a
                         // list and a grid of the same tracks arrive alike
                         style={{ '--i': i } as React.CSSProperties}
-                        onClick={() => play_music(name)}
-                        onContextMenu={song_context(name)}
+                        onClick={() => play_from(name, within ?? null)}
+                        onContextMenu={song_context(name, within)}
                     >
                         {cover(name, 'row-cover')}
 
@@ -4455,7 +4538,13 @@ export default function App() {
     // one block of the library page: what it is, where the rest of it lives,
     // and ten covers. every block is the same shape, so the page reads as one
     // thing rather than four.
-    function shelf(label: string, names: string[], go?: () => void, note?: string) {
+    function shelf(
+        label: string,
+        names: string[],
+        go?: () => void,
+        note?: string,
+        within?: string[],
+    ) {
         return (
             <section className='block'>
                 <div className='shelf-head'>
@@ -4469,7 +4558,7 @@ export default function App() {
                     )}
                 </div>
 
-                {track_cards(names)}
+                {track_cards(names, within)}
             </section>
         )
     }
@@ -4623,24 +4712,27 @@ export default function App() {
     }
 
     function library_page() {
-        const on_disk = new Set(songs)
-        // a favourite whose file has left the folder cannot be played, so it is
-        // not on the shelf either
-        const favorite_songs = favorites
-            .map((track) => track.file_path)
-            .filter((name) => on_disk.has(name))
-
         const empty = !favorite_songs.length && !liked_songs.length && !has_arrivals
 
         return (
             <>
                 {favorite_songs.length > 0 &&
-                    shelf('Favorites', favorite_songs.slice(0, SHELF), () =>
-                        set_profile_open(true),
+                    shelf(
+                        'Favorites',
+                        favorite_songs.slice(0, SHELF),
+                        () => set_profile_open(true),
+                        undefined,
+                        favorite_songs,
                     )}
 
                 {liked_songs.length > 0 &&
-                    shelf('Liked', liked_songs.slice(0, SHELF), () => open_view('liked'))}
+                    shelf(
+                        'Liked',
+                        liked_songs.slice(0, SHELF),
+                        () => open_view('liked'),
+                        undefined,
+                        liked_songs,
+                    )}
 
                 {has_arrivals &&
                     shelf(
@@ -4648,6 +4740,7 @@ export default function App() {
                         arrivals,
                         undefined,
                         `last added ${format_date(added_of(arrivals[0])).toLowerCase()}`,
+                        arrivals,
                     )}
 
                 {empty && (
@@ -5900,7 +5993,13 @@ export default function App() {
                                         <button
                                             key={track.file_path}
                                             className='album'
-                                            onClick={() => play_music(track.file_path)}
+                                            onClick={() =>
+                                                play_from(track.file_path, favorite_songs)
+                                            }
+                                            onContextMenu={song_context(
+                                                track.file_path,
+                                                favorite_songs,
+                                            )}
                                         >
                                             {cover(track.file_path, 'album-cover')}
                                             <div className='title ellipsis'>
@@ -5962,7 +6061,10 @@ export default function App() {
                                                 key={name}
                                                 className='track'
                                                 onClick={() => play_music(name)}
-                                                onContextMenu={song_context(name)}
+                                                onContextMenu={song_context(
+                                                    name,
+                                                    scope ?? undefined,
+                                                )}
                                             >
                                                 <div className='track-meta'>
                                                     <div className='name ellipsis'>
@@ -6200,8 +6302,8 @@ export default function App() {
                                 <button
                                     key={name}
                                     className='result'
-                                    onClick={() => play_music(name)}
-                                    onContextMenu={song_context(name)}
+                                    onClick={() => play_from(name, liked_songs)}
+                                    onContextMenu={song_context(name, liked_songs)}
                                 >
                                     {cover(name, '')}
                                     <div className='result-meta'>
@@ -6273,7 +6375,7 @@ export default function App() {
                     {open_menu.kind === 'song' && (
                         <>
                             <div className='context-head ellipsis'>{title_of(open_menu.song)}</div>
-                            <button onClick={() => play_music(open_menu.song)}>
+                            <button onClick={() => play_from(open_menu.song, open_menu.within ?? null)}>
                                 <Icon d={ICONS.play} size={15} fill />
                                 Play
                             </button>
