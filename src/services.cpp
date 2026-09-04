@@ -693,7 +693,7 @@ namespace yugen
 
           const float last_vol = load_volume();
 
-          const ma_result res = ma_sound_init_from_file(engine, file_path.c_str(), 0, NULL, NULL, &sound);
+          const ma_result res = ma_sound_init_from_file(engine, file_path.c_str(), 0, nullptr, nullptr, &sound);
 
           if(res != MA_SUCCESS)
           {
@@ -1364,6 +1364,7 @@ namespace yugen
           // the cover, if one is known by now; the logo stands in until then and
           // whenever the track turns out to have no artwork anywhere
           const std::string key = fs::path(track.file_path).filename().string();
+          const auto cached = cached_u_cover(key);
 
           std::string image = youtube_cover(key);
 
